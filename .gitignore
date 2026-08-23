@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+coverage/
+development-data/
+tests/fixtures/*.png
+scanner-debug/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.pbpbackup
+.env
+.DS_Store

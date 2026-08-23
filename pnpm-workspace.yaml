@@ -1,0 +1,8 @@
+packages:
+  - .
+
+allowBuilds:
+  electron: true
+  esbuild: true
+  electron-winstaller: false
+  tesseract.js: false

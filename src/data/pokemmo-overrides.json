@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "rulesetVersion": "pokemmo-v1-2026-08-23",
+  "notes": "PokeMMO-specific corrections are deliberately separate from normalized PokéAPI data.",
+  "species": {
+    "29": { "hatchSpeciesId": 29 },
+    "30": { "hatchSpeciesId": 29 },
+    "31": { "hatchSpeciesId": 29 },
+    "32": { "hatchSpeciesId": 32 },
+    "33": { "hatchSpeciesId": 32 },
+    "34": { "hatchSpeciesId": 32 },
+    "490": { "breedable": false, "special": ["Manaphy breeding is not enabled in the V1 ruleset pending a verified PokeMMO-specific rule."] }
+  }
+}
