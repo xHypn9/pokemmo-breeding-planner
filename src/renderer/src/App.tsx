@@ -16,6 +16,7 @@ const exactDefault = { hp: 31, atk: 31, def: 31, spAtk: 15, spDef: 31, speed: 31
 const exactModeDefault = { hp: true, atk: true, def: true, spAtk: false, spDef: true, speed: true }
 const defaultPlannerTarget = (): BreedingTarget => ({ speciesId: 445, ivs: { ...exactDefault }, ivExact: { ...exactModeDefault }, nature: 'Jolly', ha: 'Yes', alpha: 'Alpha', optimizer: 'balanced' })
 const ivDraftsForTarget = (target: BreedingTarget): Record<Stat, string> => Object.fromEntries(STATS.map((stat) => [stat, target.ivs[stat] === null ? '' : targetIvLabel(target, stat)])) as Record<Stat, string>
+const inventoryDisplayStatus = (pokemon: InventoryPokemon): InventoryPokemon['status'] | 'Unavailable' => pokemon.status === 'Available' && !pokemon.breedingEnabled ? 'Unavailable' : pokemon.status
 const formatElapsed = (milliseconds: number): string => {
   const totalSeconds = Math.floor(milliseconds / 1_000)
   return `${String(Math.floor(totalSeconds / 60)).padStart(2, '0')}:${String(totalSeconds % 60).padStart(2, '0')}`
@@ -49,7 +50,7 @@ export function App() {
   return <div className="app-shell">
     <aside><div className="brand"><span className="brand-mark">α</span><div><strong>Breeding Planner</strong></div></div>
       <nav>{(Object.keys(labels) as View[]).map((key) => <button key={key} className={view === key ? 'active' : ''} onClick={() => navigate(key)}>{labels[key]}</button>)}</nav>
-      <div className="sidebar-foot"><small>{data.inventory.filter((p) => p.status === 'Available').length} available</small><small>{data.plans.filter((p) => ['Ready', 'In Progress'].includes(p.status)).length} active plans</small></div>
+      <div className="sidebar-foot"><small>{data.inventory.filter((p) => p.status === 'Available' && p.breedingEnabled).length} available</small><small>{data.plans.filter((p) => ['Ready', 'In Progress'].includes(p.status)).length} active plans</small></div>
     </aside>
     <main><header><h1>{labels[view]}</h1>{notice && <button className="notice" onClick={() => setNotice('')}>{notice} ×</button>}</header>
       {visited.has('dashboard') && <div className="view-pane" hidden={view !== 'dashboard'}><Dashboard active={view === 'dashboard'} onNavigate={navigate} /></div>}
@@ -78,7 +79,7 @@ function Dashboard({ active, onNavigate }: { active: boolean; onNavigate(view: V
 
 function InventoryView({ species, boxes, inventory, refresh, run }: ReturnType<typeof useAsyncData> & { run(operation: () => Promise<unknown>, success: string): Promise<void> }) {
   const [query, setQuery] = useState(''); const [box, setBox] = useState(''); const [group, setGroup] = useState(''); const [gender, setGender] = useState('')
-  const [alpha, setAlpha] = useState(''); const [ha, setHa] = useState(''); const [nature, setNature] = useState(''); const [iv31, setIv31] = useState<Stat[]>([])
+  const [alpha, setAlpha] = useState(''); const [ha, setHa] = useState(''); const [nature, setNature] = useState(''); const [status, setStatus] = useState(''); const [iv31, setIv31] = useState<Stat[]>([])
   const [editing, setEditing] = useState<InventoryPokemon | 'new' | null>(null); const [selected, setSelected] = useState<number[]>([]); const [addingBox, setAddingBox] = useState(false)
   const [sort, setSort] = useState<{ key: 'species' | 'gender' | Stat | 'nature' | 'traits' | 'box' | 'status'; direction: 1 | -1 }>({ key: 'species', direction: 1 })
   const speciesMap = useMemo(() => new Map(species.map((entry) => [entry.id, entry])), [species])
@@ -86,7 +87,7 @@ function InventoryView({ species, boxes, inventory, refresh, run }: ReturnType<t
     const meta = speciesMap.get(pokemon.speciesId); const q = query.toLowerCase()
     return (!q || meta?.name.toLowerCase().includes(q) || pokemon.notes.toLowerCase().includes(q)) && (!box || pokemon.boxId === Number(box))
       && (!group || meta?.eggGroups.includes(group)) && (!gender || pokemon.gender === gender) && (!alpha || pokemon.alpha === (alpha === 'yes'))
-      && (!ha || pokemon.ha === (ha === 'yes')) && (!nature || pokemon.nature === nature) && iv31.every((stat) => pokemon.ivs[stat] === 31)
+      && (!ha || pokemon.ha === (ha === 'yes')) && (!nature || pokemon.nature === nature) && (!status || inventoryDisplayStatus(pokemon) === status) && iv31.every((stat) => pokemon.ivs[stat] === 31)
   }).sort((a, b) => {
     const value = (pokemon: InventoryPokemon): string | number => {
       if (sort.key === 'species') return speciesMap.get(pokemon.speciesId)?.name ?? ''
@@ -95,7 +96,7 @@ function InventoryView({ species, boxes, inventory, refresh, run }: ReturnType<t
       if (sort.key === 'nature') return pokemon.nature
       if (sort.key === 'traits') return Number(pokemon.alpha) * 2 + Number(pokemon.ha)
       if (sort.key === 'box') return pokemon.boxName ?? ''
-      return pokemon.status
+      return inventoryDisplayStatus(pokemon)
     }
     const left = value(a); const right = value(b)
     const compared = typeof left === 'number' && typeof right === 'number' ? left - right : String(left).localeCompare(String(right))
@@ -112,14 +113,15 @@ function InventoryView({ species, boxes, inventory, refresh, run }: ReturnType<t
     <select value={alpha} onChange={(e) => setAlpha(e.target.value)}><option value="">Alpha: Any</option><option value="yes">Alpha: Yes</option><option value="no">Alpha: No</option></select>
     <select value={ha} onChange={(e) => setHa(e.target.value)}><option value="">HA: Any</option><option value="yes">HA: Yes</option><option value="no">HA: No</option></select>
     <select value={nature} onChange={(e) => setNature(e.target.value)}><option value="">All natures</option>{NATURES.map((entry) => <option key={entry}>{entry}</option>)}</select>
+    <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option><option>Available</option><option>Unavailable</option><option>Reserved</option><option>Consumed</option></select>
   </div><div className="toolbar compact"><span>31 IV:</span>{STATS.map((stat) => <label className="check" key={stat}><input type="checkbox" checked={iv31.includes(stat)} onChange={() => setIv31((old) => old.includes(stat) ? old.filter((x) => x !== stat) : [...old, stat])} />{stat}</label>)}
     <span className="spacer" /><button onClick={() => setAddingBox(true)}>+ Box</button><button className="primary" onClick={() => setEditing('new')}>+ Pokémon</button></div>
-  {selected.length > 0 && <div className="bulk-bar"><b>{selected.length} selected</b><select onChange={(e) => { if (e.target.value) void bulkUpdate({ boxId: Number(e.target.value) }, 'box updated') }} defaultValue=""><option value="">Move to box…</option>{boxes.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ nature: e.target.value as Nature }, `nature ${e.target.value}`) }} defaultValue=""><option value="">Set nature…</option>{NATURES.map((entry) => <option key={entry}>{entry}</option>)}</select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ alpha: e.target.value === 'yes' }, `Alpha ${e.target.value}`) }} defaultValue=""><option value="">Set Alpha…</option><option value="yes">Yes</option><option value="no">No</option></select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ ha: e.target.value === 'yes' }, `HA ${e.target.value}`) }} defaultValue=""><option value="">Set HA…</option><option value="yes">Yes</option><option value="no">No</option></select><button onClick={() => setSelected([])}>Clear</button></div>}
+  {selected.length > 0 && <div className="bulk-bar"><b>{selected.length} selected</b><select onChange={(e) => { if (e.target.value) void bulkUpdate({ boxId: Number(e.target.value) }, 'box updated') }} defaultValue=""><option value="">Move to box…</option>{boxes.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ nature: e.target.value as Nature }, `nature ${e.target.value}`) }} defaultValue=""><option value="">Set nature…</option>{NATURES.map((entry) => <option key={entry}>{entry}</option>)}</select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ alpha: e.target.value === 'yes' }, `Alpha ${e.target.value}`) }} defaultValue=""><option value="">Set Alpha…</option><option value="yes">Yes</option><option value="no">No</option></select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ ha: e.target.value === 'yes' }, `HA ${e.target.value}`) }} defaultValue=""><option value="">Set HA…</option><option value="yes">Yes</option><option value="no">No</option></select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ breedingEnabled: e.target.value === 'available' }, e.target.value) }} defaultValue=""><option value="">Set breeding status…</option><option value="available">Available</option><option value="unavailable">Unavailable</option></select><button onClick={() => setSelected([])}>Clear</button></div>}
   <div className="table-wrap"><table><thead><tr><th><input type="checkbox" onChange={(e) => setSelected(e.target.checked ? filtered.map((p) => p.id) : [])} /></th><th>{sortHeader('species', 'Pokémon')}</th><th>{sortHeader('gender', 'Sex')}</th>{STATS.map((stat) => <th key={stat}>{sortHeader(stat, stat)}</th>)}<th>{sortHeader('nature', 'Nature')}</th><th>{sortHeader('traits', 'Traits')}</th><th>{sortHeader('box', 'Box')}</th><th>{sortHeader('status', 'Status')}</th><th /></tr></thead>
-    <tbody>{filtered.map((pokemon) => <tr key={pokemon.id} className={pokemon.status !== 'Available' ? 'muted' : ''}><td><input type="checkbox" checked={selected.includes(pokemon.id)} onChange={() => setSelected((old) => old.includes(pokemon.id) ? old.filter((id) => id !== pokemon.id) : [...old, pokemon.id])} /></td>
+    <tbody>{filtered.map((pokemon) => { const displayStatus = inventoryDisplayStatus(pokemon); return <tr key={pokemon.id} className={displayStatus !== 'Available' ? 'muted' : ''}><td><input type="checkbox" checked={selected.includes(pokemon.id)} onChange={() => setSelected((old) => old.includes(pokemon.id) ? old.filter((id) => id !== pokemon.id) : [...old, pokemon.id])} /></td>
       <td className="pokemon-cell"><Sprite speciesId={pokemon.speciesId} size={34} /><div><b>{speciesMap.get(pokemon.speciesId)?.name}</b><small>#{pokemon.id}</small></div></td><td>{pokemon.gender}</td>
-      {STATS.map((stat) => <td className={pokemon.ivs[stat] === 31 ? 'perfect' : ''} key={stat}>{pokemon.ivs[stat]}</td>)}<td>{pokemon.nature}</td><td>{pokemon.alpha && <span className="badge alpha">α</span>} {pokemon.ha && <span className="badge ha">HA</span>}</td><td>{pokemon.boxName ?? '—'}</td><td><span className={`status ${pokemon.status.toLowerCase()}`}>{pokemon.status}</span></td>
-      <td><button className="icon" onClick={() => setEditing(pokemon)}>Edit</button> <button className="icon danger" onClick={() => confirm(`Delete #${pokemon.id}?`) && void run(() => window.desktopApi.inventory.delete(pokemon.id), `#${pokemon.id} deleted`)}>Delete</button></td></tr>)}</tbody></table></div>
+      {STATS.map((stat) => <td className={pokemon.ivs[stat] === 31 ? 'perfect' : ''} key={stat}>{pokemon.ivs[stat]}</td>)}<td>{pokemon.nature}</td><td>{pokemon.alpha && <span className="badge alpha">α</span>} {pokemon.ha && <span className="badge ha">HA</span>}</td><td>{pokemon.boxName ?? '—'}</td><td><span className={`status ${displayStatus.toLowerCase()}`}>{displayStatus}</span></td>
+      <td><button className="icon" onClick={() => setEditing(pokemon)}>Edit</button> <button className="icon danger" onClick={() => confirm(`Delete #${pokemon.id}?`) && void run(() => window.desktopApi.inventory.delete(pokemon.id), `#${pokemon.id} deleted`)}>Delete</button></td></tr> })}</tbody></table></div>
   {editing && <PokemonModal value={editing === 'new' ? null : editing} species={species} boxes={boxes} onClose={() => setEditing(null)} onSave={async (input) => {
     await run(() => editing === 'new' ? window.desktopApi.inventory.create(input) : window.desktopApi.inventory.update(editing.id, input), editing === 'new' ? 'Pokémon added' : 'Pokémon updated'); setEditing(null); await refresh()
   }} />}
@@ -137,13 +139,13 @@ function BoxModal({ onClose, onCreate }: { onClose(): void; onCreate(name: strin
 
 function PokemonModal({ value, species, boxes, onClose, onSave }: { value: InventoryPokemon | null; species: Species[]; boxes: BoxRecord[]; onClose(): void; onSave(input: InventoryInput): Promise<void> }) {
   const initialSpecies = value?.speciesId ?? 443
-  const [form, setForm] = useState<InventoryInput>({ speciesId: initialSpecies, gender: value?.gender ?? 'Female', ivs: value?.ivs ?? { ...exactDefault }, nature: value?.nature ?? 'Jolly', alpha: value?.alpha ?? true, ha: value?.ha ?? false, boxId: value?.boxId ?? boxes[0]?.id ?? null, notes: value?.notes ?? '' })
+  const [form, setForm] = useState<InventoryInput>({ speciesId: initialSpecies, gender: value?.gender ?? 'Female', ivs: value?.ivs ?? { ...exactDefault }, nature: value?.nature ?? 'Jolly', alpha: value?.alpha ?? true, ha: value?.ha ?? false, boxId: value?.boxId ?? boxes[0]?.id ?? null, notes: value?.notes ?? '', breedingEnabled: value?.breedingEnabled ?? true })
   const meta = species.find((entry) => entry.id === form.speciesId)
   const genders: Gender[] = meta?.gender.kind === 'genderless' ? ['Genderless'] : meta?.gender.femaleEighths === 0 ? ['Male'] : meta?.gender.femaleEighths === 8 ? ['Female'] : ['Female', 'Male']
   return <div className="modal-backdrop"><form className="modal" onSubmit={(e) => { e.preventDefault(); void onSave(form) }}><div className="panel-title"><h2>{value ? `Edit #${value.id}` : 'Add Pokémon'}</h2><button type="button" onClick={onClose}>×</button></div>
     <label>Species<select value={form.speciesId} onChange={(e) => { const id = Number(e.target.value); const next = species.find((s) => s.id === id); const allowed: Gender = next?.gender.kind === 'genderless' ? 'Genderless' : next?.gender.femaleEighths === 0 ? 'Male' : next?.gender.femaleEighths === 8 ? 'Female' : 'Female'; setForm({ ...form, speciesId: id, gender: allowed }) }}>{species.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
     <div className="metadata"><span>Egg Groups: <b>{meta?.eggGroups.join(' + ')}</b></span><span>Hatches as: <b>{species.find((s) => s.id === meta?.hatchSpeciesId)?.name}</b></span></div>
-    <div className="form-grid"><label>Gender<select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value as Gender })}>{genders.map((g) => <option key={g}>{g}</option>)}</select></label><label>Nature<select value={form.nature} onChange={(e) => setForm({ ...form, nature: e.target.value as Nature })}>{NATURES.map((n) => <option key={n}>{n}</option>)}</select></label><label>Box<select value={form.boxId ?? ''} onChange={(e) => setForm({ ...form, boxId: e.target.value ? Number(e.target.value) : null })}><option value="">No box</option>{boxes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label></div>
+    <div className="form-grid"><label>Gender<select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value as Gender })}>{genders.map((g) => <option key={g}>{g}</option>)}</select></label><label>Nature<select value={form.nature} onChange={(e) => setForm({ ...form, nature: e.target.value as Nature })}>{NATURES.map((n) => <option key={n}>{n}</option>)}</select></label><label>Box<select value={form.boxId ?? ''} onChange={(e) => setForm({ ...form, boxId: e.target.value ? Number(e.target.value) : null })}><option value="">No box</option>{boxes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label><label>Breeding status<select disabled={value?.status !== undefined && value.status !== 'Available'} value={form.breedingEnabled === false ? 'unavailable' : 'available'} onChange={(e) => setForm({ ...form, breedingEnabled: e.target.value === 'available' })}><option value="available">Available</option><option value="unavailable">Unavailable</option></select></label></div>
     <div className="ivs-editor">{STATS.map((stat) => <label key={stat}>{stat}<input type="number" min="0" max="31" value={form.ivs[stat]} onChange={(e) => setForm({ ...form, ivs: { ...form.ivs, [stat]: Number(e.target.value) } })} /></label>)}</div>
     <div className="form-grid"><label className="switch"><input type="checkbox" checked={form.alpha} onChange={(e) => setForm({ ...form, alpha: e.target.checked })} />Alpha</label><label className="switch"><input type="checkbox" checked={form.ha} onChange={(e) => setForm({ ...form, ha: e.target.checked })} />HA potential</label></div>
     <label>Notes<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label><div className="modal-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary">Save</button></div></form></div>
@@ -282,7 +284,7 @@ function PlannerView({ species, inventory, run, onOpenSaved, initialTarget }: Re
       if (worker.current !== next) return
       const elapsed = performance.now() - workerStartedAt.current; setElapsedMs(elapsed); setProgress(`Planner worker failed: ${event.message} · ${formatElapsed(elapsed)}`); setRunning(false); next.terminate(); worker.current = null
     }
-    next.postMessage({ inventory: inventory.filter((entry) => entry.status === 'Available'), target })
+    next.postMessage({ inventory: inventory.filter((entry) => entry.status === 'Available' && entry.breedingEnabled), target })
   }
   const cancel = () => {
     if (!worker.current) return

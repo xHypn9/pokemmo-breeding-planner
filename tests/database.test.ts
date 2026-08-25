@@ -13,6 +13,55 @@ const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
 describe('SQLite repositories and atomic breed completion', () => {
+  it('migrates existing schema-v1 inventory as breeding-enabled', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pbp-v1-migration-test-')); directories.push(directory)
+    const path = join(directory, 'test.sqlite')
+    const original = new AppDatabase(path); const repository = new AppRepository(original)
+    const pokemon = repository.createPokemon({
+      speciesId: 443, gender: 'Male', ivs: ivs({ hp: 31 }), nature: 'Hardy', alpha: false, ha: false,
+      boxId: null, notes: 'Legacy record'
+    })
+    original.db.exec('ALTER TABLE pokemon_inventory DROP COLUMN breeding_enabled; DELETE FROM schema_migrations WHERE version=2;')
+    original.close()
+
+    const migrated = new AppDatabase(path); const migratedRepository = new AppRepository(migrated)
+    expect(migratedRepository.inventoryById(pokemon.id).breedingEnabled).toBe(true)
+    const schema = migrated.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number }
+    expect(schema.version).toBe(2)
+    migrated.close()
+  })
+
+  it('keeps an Unavailable Pokémon in inventory while excluding it from breeding', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pbp-availability-test-')); directories.push(directory)
+    const database = new AppDatabase(join(directory, 'test.sqlite')); const repository = new AppRepository(database)
+    const box = repository.createBox('Do not breed')
+    const exact = ivs({ hp: 31, atk: 31, def: 31, spAtk: 31, spDef: 31, speed: 31 })
+    const pokemon = repository.createPokemon({
+      speciesId: 443, gender: 'Female', ivs: exact, nature: 'Jolly', alpha: true, ha: true,
+      boxId: box.id, notes: 'Keep for another purpose'
+    })
+    const target: BreedingTarget = { speciesId: 445, ivs: exact, nature: 'Jolly', alpha: 'Alpha', ha: 'Yes', optimizer: 'balanced' }
+    const matchingTree = new BreedingPlanner().calculate(repository.inventory(), target, { maxStates: 1_000 })
+    expect(matchingTree.inventoryIds).toContain(pokemon.id)
+
+    const disabled = repository.updatePokemon(pokemon.id, { breedingEnabled: false })
+    expect(disabled.status).toBe('Available')
+    expect(disabled.breedingEnabled).toBe(false)
+    expect(repository.inventory({ breedingEnabled: false }).map((entry) => entry.id)).toEqual([pokemon.id])
+    expect(repository.dashboard().available).toBe(0)
+    const excludedTree = new BreedingPlanner().calculate(repository.inventory(), target, { maxStates: 1_000 })
+    expect(excludedTree.inventoryIds).not.toContain(pokemon.id)
+    expect(excludedTree.missingBreeders.length).toBeGreaterThan(0)
+    expect(() => repository.savePlan('Stale plan', matchingTree)).toThrow('no longer available for breeding')
+
+    const enabled = repository.updatePokemon(pokemon.id, { breedingEnabled: true })
+    expect(enabled.breedingEnabled).toBe(true)
+    expect(repository.dashboard().available).toBe(1)
+    const schema = database.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number }
+    expect(schema.version).toBe(2)
+    database.close()
+  })
+
   it('imports a mixed scanner batch including non-breedable Pokémon for inventory tracking', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pbp-inventory-test-')); directories.push(directory)
     const database = new AppDatabase(join(directory, 'test.sqlite')); const repository = new AppRepository(database)

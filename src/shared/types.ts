@@ -40,12 +40,14 @@ export interface InventoryPokemon {
   boxName?: string | null
   notes: string
   status: PokemonStatus
+  breedingEnabled: boolean
   createdAt: string
   updatedAt: string
 }
 
-export interface InventoryInput extends Omit<InventoryPokemon, 'id' | 'createdAt' | 'updatedAt' | 'boxName' | 'status'> {
+export interface InventoryInput extends Omit<InventoryPokemon, 'id' | 'createdAt' | 'updatedAt' | 'boxName' | 'status' | 'breedingEnabled'> {
   status?: PokemonStatus
+  breedingEnabled?: boolean
 }
 
 export interface BreedingTarget {

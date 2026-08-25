@@ -9,7 +9,7 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 
 ## What works in V1
 
-- Dense inventory with Boxes, combined filters, sortable columns, edits, deletion and bulk Box/Nature/Alpha/HA updates.
+- Dense inventory with Boxes, combined filters, sortable columns, edits, deletion and bulk Box/Nature/Alpha/HA updates. An owned Pokémon can be marked `Unavailable` individually or in bulk: it stays in My Pokémon but is excluded from every Planner search until re-enabled.
 - Keyboard-friendly Quick Insert grid with TSV paste, row duplication, immediate validation, automatic species metadata and a scrollable keyboard-navigable autocomplete.
 - Fully local PokeMMO Box Scanner with window-only capture, normalized ROI calibration, offline OCR, visual Alpha/HA/gender detection, per-field confidence and editable review queue.
 - Direct ROI calibration on the full captured PokeMMO window: drag colored areas with the mouse and resize them from their corner handles; numeric percentages remain available for fine tuning.

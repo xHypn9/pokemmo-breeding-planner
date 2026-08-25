@@ -15,7 +15,7 @@ export function node(id: string, speciesId: number, gender: Gender, values: Ivs,
 
 export function pokemon(id: number, speciesId: number, gender: Gender, values: Ivs, nature: Nature = 'Hardy', alpha = false, ha = false): InventoryPokemon {
   return {
-    id, speciesId, gender, ivs: values, nature, alpha, ha, boxId: 1, boxName: 'Test', notes: '', status: 'Available',
+    id, speciesId, gender, ivs: values, nature, alpha, ha, boxId: 1, boxName: 'Test', notes: '', status: 'Available', breedingEnabled: true,
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z'
   }
 }

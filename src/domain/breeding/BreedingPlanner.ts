@@ -79,7 +79,7 @@ export class BreedingPlanner {
       statesExplored: 0, statesPruned: 0, cacheHits: 0, plansConsidered: 0,
       searchTimeMs: 0, bestObjectiveScore: null, stoppedByLimit: false
     }
-    const available = inventory.filter((pokemon) => pokemon.status === 'Available')
+    const available = inventory.filter((pokemon) => pokemon.status === 'Available' && pokemon.breedingEnabled !== false)
     const actual = available.map((pokemon) => this.inventoryCandidate(pokemon))
       .filter((candidate) => target.alpha !== 'Alpha' || candidate.node.alpha)
     const ownedCandidates = [...actual]

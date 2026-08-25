@@ -63,7 +63,9 @@ export class BackupService {
     const source = readdirSync(this.safetyDirectory).map((name) => join(this.safetyDirectory, name))
       .filter((entry) => entry.endsWith('.sqlite')).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0]
     if (!source) throw new Error('No automatic safety snapshot is available')
-    this.validateDatabase(source, APP_SCHEMA_VERSION)
+    const sourceVersion = this.databaseVersion(source)
+    if (sourceVersion > APP_SCHEMA_VERSION) throw new Error(`Safety snapshot schema ${sourceVersion} is newer than this app supports`)
+    this.validateDatabase(source, sourceVersion)
     this.replaceDatabase(source)
     renameSync(source, `${source}.restored`)
     return source
@@ -82,6 +84,16 @@ export class BackupService {
       if (!row || Number(row.version) !== expectedVersion) throw new Error('Backup database schema does not match the expected version')
       const integrity = probe.prepare('PRAGMA integrity_check').get() as { integrity_check?: string }
       if (integrity.integrity_check !== 'ok') throw new Error(`Backup database failed integrity check: ${integrity.integrity_check ?? 'unknown result'}`)
+    } finally { probe.close() }
+  }
+
+  private databaseVersion(source: string): number {
+    const probe = new DatabaseSync(source, { readOnly: true })
+    try {
+      const row = probe.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number | null }
+      const version = Number(row?.version)
+      if (!Number.isInteger(version) || version < 1) throw new Error('Safety snapshot has no supported schema version')
+      return version
     } finally { probe.close() }
   }
 

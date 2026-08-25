@@ -6,11 +6,11 @@ export const ivsSchema = z.object({ hp: iv, atk: iv, def: iv, spAtk: iv, spDef: 
 export const inventorySchema = z.object({
   speciesId: z.number().int().positive(), gender: z.enum(['Male', 'Female', 'Genderless']), ivs: ivsSchema,
   nature: z.enum(NATURES), alpha: z.boolean(), ha: z.boolean(), boxId: z.number().int().positive().nullable(),
-  notes: z.string().max(2_000), status: z.enum(['Available', 'Reserved', 'Consumed']).optional()
+  notes: z.string().max(2_000), status: z.enum(['Available', 'Reserved', 'Consumed']).optional(), breedingEnabled: z.boolean().optional()
 })
 export const inventoryPatchSchema = inventorySchema.partial()
 export const filtersSchema = z.object({
-  status: z.enum(['Available', 'Reserved', 'Consumed']).optional(), speciesId: z.number().int().positive().optional(),
+  status: z.enum(['Available', 'Reserved', 'Consumed']).optional(), breedingEnabled: z.boolean().optional(), speciesId: z.number().int().positive().optional(),
   boxId: z.number().int().positive().optional(), gender: z.enum(['Male', 'Female', 'Genderless']).optional(),
   alpha: z.boolean().optional(), ha: z.boolean().optional(), nature: z.enum(NATURES).optional(),
   query: z.string().max(100).optional(), eggGroup: z.string().max(40).optional(), iv31: z.array(z.enum(STATS)).max(6).optional()

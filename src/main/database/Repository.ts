@@ -15,6 +15,7 @@ interface InventoryRow extends Record<string, unknown> {
   id: number; species_id: number; gender: InventoryPokemon['gender']; hp: number; atk: number; def: number;
   sp_atk: number; sp_def: number; speed: number; nature: Nature; alpha: number; ha: number;
   box_id: number | null; box_name?: string | null; notes: string; status: InventoryPokemon['status']; created_at: string; updated_at: string
+  breeding_enabled: number
 }
 
 function inventoryFromRow(row: InventoryRow): InventoryPokemon {
@@ -22,7 +23,7 @@ function inventoryFromRow(row: InventoryRow): InventoryPokemon {
     id: Number(row.id), speciesId: Number(row.species_id), gender: row.gender,
     ivs: { hp: Number(row.hp), atk: Number(row.atk), def: Number(row.def), spAtk: Number(row.sp_atk), spDef: Number(row.sp_def), speed: Number(row.speed) },
     nature: row.nature, alpha: bool(row.alpha), ha: bool(row.ha), boxId: row.box_id === null ? null : Number(row.box_id),
-    boxName: row.box_name ?? null, notes: row.notes, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at
+    boxName: row.box_name ?? null, notes: row.notes, status: row.status, breedingEnabled: bool(row.breeding_enabled), createdAt: row.created_at, updatedAt: row.updated_at
   }
 }
 
@@ -48,6 +49,7 @@ export class AppRepository {
   inventory(filters: Record<string, unknown> = {}): InventoryPokemon[] {
     const where: string[] = []; const values: Array<string | number> = []
     if (filters.status) { where.push('i.status = ?'); values.push(String(filters.status)) }
+    if (typeof filters.breedingEnabled === 'boolean') { where.push('i.breeding_enabled = ?'); values.push(filters.breedingEnabled ? 1 : 0) }
     if (filters.speciesId) { where.push('i.species_id = ?'); values.push(Number(filters.speciesId)) }
     if (filters.boxId) { where.push('i.box_id = ?'); values.push(Number(filters.boxId)) }
     if (filters.gender) { where.push('i.gender = ?'); values.push(String(filters.gender)) }
@@ -76,10 +78,10 @@ export class AppRepository {
     for (const stat of STATS) if (!Number.isInteger(input.ivs[stat]) || input.ivs[stat] < 0 || input.ivs[stat] > 31) throw new Error(`${stat} must be an integer from 0 to 31`)
     if (!NATURES.includes(input.nature)) throw new Error(`Unknown nature ${input.nature}`)
     const timestamp = now()
-    const result = this.db.prepare(`INSERT INTO pokemon_inventory(species_id,gender,hp,atk,def,sp_atk,sp_def,speed,nature,alpha,ha,box_id,notes,status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const result = this.db.prepare(`INSERT INTO pokemon_inventory(species_id,gender,hp,atk,def,sp_atk,sp_def,speed,nature,alpha,ha,box_id,notes,status,breeding_enabled,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       input.speciesId, input.gender, input.ivs.hp, input.ivs.atk, input.ivs.def, input.ivs.spAtk, input.ivs.spDef, input.ivs.speed,
-      input.nature, input.alpha ? 1 : 0, input.ha ? 1 : 0, input.boxId, input.notes, input.status ?? 'Available', timestamp, timestamp
+      input.nature, input.alpha ? 1 : 0, input.ha ? 1 : 0, input.boxId, input.notes, input.status ?? 'Available', input.breedingEnabled === false ? 0 : 1, timestamp, timestamp
     )
     this.log(action, 'pokemon', String(result.lastInsertRowid), input)
     return this.inventoryById(Number(result.lastInsertRowid))
@@ -91,7 +93,7 @@ export class AppRepository {
 
   updatePokemon(id: number, patch: Partial<InventoryInput>): InventoryPokemon {
     const current = this.inventoryById(id)
-    const breedingFields: Array<keyof InventoryInput> = ['speciesId', 'gender', 'ivs', 'nature', 'alpha', 'ha', 'status']
+    const breedingFields: Array<keyof InventoryInput> = ['speciesId', 'gender', 'ivs', 'nature', 'alpha', 'ha', 'status', 'breedingEnabled']
     if (current.status !== 'Available' && breedingFields.some((field) => patch[field] !== undefined)) {
       throw new Error(`${current.status} Pokémon #${id} cannot have breeding properties changed`)
     }
@@ -100,11 +102,11 @@ export class AppRepository {
       ivs: { ...current.ivs, ...(patch.ivs ?? {}) }, nature: patch.nature ?? current.nature,
       alpha: patch.alpha ?? current.alpha, ha: patch.ha ?? current.ha,
       boxId: patch.boxId === undefined ? current.boxId : patch.boxId, notes: patch.notes ?? current.notes,
-      status: patch.status ?? current.status
+      status: patch.status ?? current.status, breedingEnabled: patch.breedingEnabled ?? current.breedingEnabled
     }
-    this.db.prepare(`UPDATE pokemon_inventory SET species_id=?,gender=?,hp=?,atk=?,def=?,sp_atk=?,sp_def=?,speed=?,nature=?,alpha=?,ha=?,box_id=?,notes=?,status=?,updated_at=? WHERE id=?`).run(
+    this.db.prepare(`UPDATE pokemon_inventory SET species_id=?,gender=?,hp=?,atk=?,def=?,sp_atk=?,sp_def=?,speed=?,nature=?,alpha=?,ha=?,box_id=?,notes=?,status=?,breeding_enabled=?,updated_at=? WHERE id=?`).run(
       merged.speciesId, merged.gender, merged.ivs.hp, merged.ivs.atk, merged.ivs.def, merged.ivs.spAtk, merged.ivs.spDef, merged.ivs.speed,
-      merged.nature, merged.alpha ? 1 : 0, merged.ha ? 1 : 0, merged.boxId, merged.notes, merged.status ?? 'Available', now(), id
+      merged.nature, merged.alpha ? 1 : 0, merged.ha ? 1 : 0, merged.boxId, merged.notes, merged.status ?? 'Available', merged.breedingEnabled === false ? 0 : 1, now(), id
     )
     this.log('pokemon_modified', 'pokemon', String(id), patch)
     return this.inventoryById(id)
@@ -127,7 +129,7 @@ export class AppRepository {
     return this.database.transaction(() => {
       for (const id of tree.inventoryIds) {
         const pokemon = this.inventoryById(id)
-        if (pokemon.status !== 'Available') throw new Error(`Inventory Pokémon #${id} is no longer available`)
+        if (pokemon.status !== 'Available' || !pokemon.breedingEnabled) throw new Error(`Inventory Pokémon #${id} is no longer available for breeding`)
       }
       const timestamp = now()
       const result = this.db.prepare(`INSERT INTO breeding_plans(name,status,target_json,plan_json,diagnostics_json,ruleset_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`)
@@ -221,6 +223,7 @@ export class AppRepository {
     const failures: string[] = []
     const species = this.rules.species(pokemon.speciesId)
     if (pokemon.status !== 'Available') failures.push('Pokémon is not Available')
+    if (!pokemon.breedingEnabled) failures.push('Pokémon is marked Unavailable for breeding')
     if (pokemon.gender !== constraint.gender) failures.push(`Gender must be ${constraint.gender}`)
     if (pokemon.alpha !== constraint.alpha) failures.push(`Alpha must be ${constraint.alpha ? 'Yes' : 'No'}`)
     if (constraint.ha !== null && pokemon.ha !== constraint.ha) failures.push(`HA must be ${constraint.ha ? 'Yes' : 'No'}`)
@@ -256,7 +259,7 @@ export class AppRepository {
   }
 
   dashboard(): DashboardStats {
-    const inventory = this.inventory({ status: 'Available' })
+    const inventory = this.inventory({ status: 'Available', breedingEnabled: true })
     const ivBuckets: Record<string, number> = {}
     const eggCounts = new Map<string, number>()
     for (const pokemon of inventory) {
@@ -287,7 +290,7 @@ export class AppRepository {
   }
 
   importData(data: JsonExport): void {
-    if (data.schemaVersion !== APP_SCHEMA_VERSION) throw new Error(`Unsupported JSON schema version ${data.schemaVersion}`)
+    if (![1, APP_SCHEMA_VERSION].includes(data.schemaVersion)) throw new Error(`Unsupported JSON schema version ${data.schemaVersion}`)
     if (!Array.isArray(data.boxes) || !Array.isArray(data.pokemon) || !Array.isArray(data.plans) || !data.settings || typeof data.settings !== 'object') throw new Error('JSON export has an invalid top-level structure')
     const boxIds = new Set<number>(); const pokemonIds = new Set<number>(); const planIds = new Set<number>()
     for (const box of data.boxes) {
@@ -313,9 +316,9 @@ export class AppRepository {
     this.database.transaction(() => {
       this.db.exec('DELETE FROM operation_history; DELETE FROM missing_breeders; DELETE FROM breeding_plan_edges; DELETE FROM breeding_plan_steps; DELETE FROM breeding_plan_nodes; DELETE FROM breeding_plans; DELETE FROM pokemon_inventory; DELETE FROM boxes;')
       for (const box of data.boxes) this.db.prepare('INSERT INTO boxes(id,name,created_at) VALUES(?,?,?)').run(box.id, box.name, box.createdAt)
-      for (const pokemon of data.pokemon) this.db.prepare(`INSERT INTO pokemon_inventory(id,species_id,gender,hp,atk,def,sp_atk,sp_def,speed,nature,alpha,ha,box_id,notes,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      for (const pokemon of data.pokemon) this.db.prepare(`INSERT INTO pokemon_inventory(id,species_id,gender,hp,atk,def,sp_atk,sp_def,speed,nature,alpha,ha,box_id,notes,status,breeding_enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         pokemon.id, pokemon.speciesId, pokemon.gender, pokemon.ivs.hp, pokemon.ivs.atk, pokemon.ivs.def, pokemon.ivs.spAtk, pokemon.ivs.spDef, pokemon.ivs.speed,
-        pokemon.nature, pokemon.alpha ? 1 : 0, pokemon.ha ? 1 : 0, pokemon.boxId, pokemon.notes, pokemon.status, pokemon.createdAt, pokemon.updatedAt)
+        pokemon.nature, pokemon.alpha ? 1 : 0, pokemon.ha ? 1 : 0, pokemon.boxId, pokemon.notes, pokemon.status, pokemon.breedingEnabled === false ? 0 : 1, pokemon.createdAt, pokemon.updatedAt)
       for (const plan of data.plans) {
         this.db.prepare(`INSERT INTO breeding_plans(id,name,status,target_json,plan_json,diagnostics_json,ruleset_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`).run(
           plan.id, plan.name, plan.status, JSON.stringify(plan.target), JSON.stringify(plan.tree), JSON.stringify(plan.diagnostics), plan.tree.rulesetVersion, plan.createdAt, plan.updatedAt)

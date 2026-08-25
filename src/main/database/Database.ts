@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { SPECIES } from '../../data/species'
 import migration001 from './migrations/001_initial.sql?raw'
+import migration002 from './migrations/002_breeding_enabled.sql?raw'
 
 const now = () => new Date().toISOString()
 const escapeSqlString = (value: string) => value.replaceAll("'", "''")
@@ -31,6 +32,11 @@ export class AppDatabase {
     if (!row) this.transaction(() => {
       this.connection.exec(migration001)
       this.connection.prepare('INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)').run(1, 'initial', now())
+    })
+    const row002 = this.connection.prepare('SELECT version FROM schema_migrations WHERE version = ?').get(2) as { version: number } | undefined
+    if (!row002) this.transaction(() => {
+      this.connection.exec(migration002)
+      this.connection.prepare('INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)').run(2, 'breeding-enabled', now())
     })
   }
 

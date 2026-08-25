@@ -12,7 +12,7 @@ const inventory: InventoryPokemon[] = template.missingBreeders.map((constraint, 
   return {
     id: index + 1, speciesId: 443, gender: constraint.gender === 'Genderless' ? 'Female' : constraint.gender,
     ivs, nature: constraint.nature ?? 'Hardy', alpha: constraint.alpha, ha: constraint.ha === true,
-    boxId: 1, boxName: `Alpha ${(index % 4) + 1}`, notes: '', status: 'Available',
+    boxId: 1, boxName: `Alpha ${(index % 4) + 1}`, notes: '', status: 'Available', breedingEnabled: true,
     createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString()
   }
 })
