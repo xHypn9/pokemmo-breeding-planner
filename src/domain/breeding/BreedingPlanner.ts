@@ -113,6 +113,7 @@ export class BreedingPlanner {
       if (!selected) throw new Error('Planner could not create any candidate plan')
       best = selected.candidate
       diagnostics.failureReason = selected.reason
+      if (diagnostics.stoppedByLimit) diagnostics.failureReason += ' Search was bounded or pruned; this is the best plan found, not a proven global optimum.'
     }
 
     diagnostics.searchTimeMs = Math.round((performance.now() - started) * 100) / 100
@@ -144,10 +145,15 @@ export class BreedingPlanner {
     const maxStates = options.maxStates ?? 18_000
     const maxFrontier = options.maxFrontier ?? 1_200
     const maxRounds = options.maxRounds ?? 8
-    let pool = this.prune(seed.filter((candidate) => candidate.node.provenanceInventoryIds.length > 0 || candidate.node.kind === 'missing'), target, maxFrontier, diagnostics)
+    const originals = seed.filter((candidate) => candidate.node.provenanceInventoryIds.length > 0 || candidate.node.kind === 'missing')
+      .sort((a, b) => this.compare(a, b, target))
+    // Every owned record remains eligible; caps apply to generated branches, not the box.
+    let pool = [...originals]
     let frontier = [...pool]
     const seen = new Set<string>()
     let explored = 0
+    let best: Candidate | null = null
+    const paired = new Set<string>()
 
     for (let round = 0; round < maxRounds && frontier.length; round += 1) {
       const generated: Candidate[] = []
@@ -156,14 +162,19 @@ export class BreedingPlanner {
         for (let j = 0; j < pool.length; j += 1) {
           const b = pool[j] as Candidate
           if (a === b || !disjoint(a.inventory, b.inventory) || !disjoint(a.missing, b.missing)) { diagnostics.statesPruned += 1; continue }
+          const pairKey = [a.node.id, b.node.id].sort().join('|')
+          if (paired.has(pairKey)) { diagnostics.cacheHits += 1; continue }
+          paired.add(pairKey)
           if (options.shouldCancel?.()) throw new PlannerCancelledError()
           for (const child of this.combineCandidates(a, b, target)) {
-            diagnostics.statesExplored += 1; explored += 1
             if (explored >= maxStates) { diagnostics.stoppedByLimit = true; break }
+            diagnostics.statesExplored += 1; explored += 1
             const signature = this.candidateSignature(child, target)
             if (seen.has(signature)) { diagnostics.cacheHits += 1; continue }
             seen.add(signature); generated.push(child)
             if (ownedCollector && child.missing.size === 0) ownedCollector.push(child)
+            if (this.isGoal(child, target) && (!best || this.compare(child, best, target) < 0)) best = child
+            if (explored >= maxStates) { diagnostics.stoppedByLimit = true; break }
           }
           if (explored >= maxStates) break
         }
@@ -171,14 +182,15 @@ export class BreedingPlanner {
         if (explored >= maxStates) break
       }
       diagnostics.plansConsidered += generated.length
-      const goals = generated.filter((candidate) => this.isGoal(candidate, target))
-      if (goals.length) return goals.sort((a, b) => this.compare(a, b, target))[0] ?? null
+      // A first goal is only an incumbent: later levels can use fewer external parents.
+      if (best && best.breeds === 1 && best.missing.size === 0) return best
       frontier = this.prune(generated, target, Math.max(160, Math.floor(maxFrontier / 2)), diagnostics)
-      pool = this.prune([...pool, ...frontier], target, maxFrontier, diagnostics)
+      pool = [...originals, ...this.prune([...pool.filter((candidate) => candidate.breeds > 0), ...frontier], target, maxFrontier, diagnostics)]
       options.onProgress?.({ phase: `Search round ${round + 1} complete`, explored: diagnostics.statesExplored, frontier: frontier.length, bestMissing: frontier[0]?.missing.size ?? null })
       if (explored >= maxStates) break
     }
-    return null
+    if (frontier.length) diagnostics.stoppedByLimit = true
+    return best
   }
 
   private combineCandidates(a: Candidate, b: Candidate, target: BreedingTarget): Candidate[] {
@@ -234,9 +246,9 @@ export class BreedingPlanner {
   private stateKey(candidate: Candidate, target: BreedingTarget): string {
     const node = candidate.node
     const rangeState = STATS.map((stat) => {
-      if (!targetIvIsRequired(target, stat) || targetIvIsExact(target, stat)) return ''
+      if (!targetIvIsRequired(target, stat)) return ''
       const domain = node.possibleIvs[stat]
-      return `${domain[0] ?? 'x'}-${domain[domain.length - 1] ?? 'x'}`
+      return domain.join('.')
     }).join(',')
     return [node.speciesId, node.gender, statMask(node, target), rangeState, node.natureGuaranteed && node.nature === target.nature ? 1 : 0, node.alpha ? 1 : 0, node.ha ? 1 : 0].join('|')
   }
@@ -253,11 +265,11 @@ export class BreedingPlanner {
       const provenance = `${ordered(candidate.inventory).join(',')}|${ordered(candidate.missing).join(',')}`
       if (bucket.some((entry) => `${ordered(entry.inventory).join(',')}|${ordered(entry.missing).join(',')}` === provenance)) { diagnostics.statesPruned += 1; continue }
       if (bucket.length < 8) bucket.push(candidate)
-      else diagnostics.statesPruned += 1
+      else { diagnostics.statesPruned += 1; diagnostics.stoppedByLimit = true }
       buckets.set(key, bucket)
     }
     const flattened = [...buckets.values()].flat().sort((a, b) => this.compare(a, b, target))
-    if (flattened.length > limit) diagnostics.statesPruned += flattened.length - limit
+    if (flattened.length > limit) { diagnostics.statesPruned += flattened.length - limit; diagnostics.stoppedByLimit = true }
     return flattened.slice(0, limit)
   }
 

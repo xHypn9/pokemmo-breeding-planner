@@ -65,6 +65,30 @@ describe('scanner parsers', () => {
     expect(parseIvs('31/31/14/25/15/2').values).toEqual({ hp: 31, atk: 31, def: 14, spAtk: 25, spDef: 15, speed: 2 })
   })
 
+  it('recovers independent digit errors by voting per IV, leaving disagreements for review', () => {
+    const selected = selectIvOcrConsensus([
+      { variant: 'a', text: '31/31/18/25/15/2', confidence: 0.95 },
+      { variant: 'b', text: '31/31/14/25/16/2', confidence: 0.94 },
+      { variant: 'c', text: '31/31/14/25/15/7', confidence: 0.93 }
+    ])
+    expect(selected.values).toEqual({ hp: 31, atk: 31, def: 14, spAtk: 25, spDef: 15, speed: 2 })
+    expect(selected.confidences.def).toBeLessThan(0.9)
+    expect(selected.confidences.spDef).toBeLessThan(0.9)
+    expect(selected.confidences.speed).toBeLessThan(0.9)
+  })
+
+  it('does not auto-approve low-confidence unanimous OCR', () => {
+    const selected = selectIvOcrConsensus(['a', 'b', 'c'].map((variant) => ({ variant, text: '31/31/18/25/15/2', confidence: 0.2 })))
+    expect(selected.confidences.def).toBeLessThan(0.9)
+  })
+
+  it('accepts two strong agreeing readings supported by weaker unanimous passes', () => {
+    const selected = selectIvOcrConsensus([0, 0.44, 0.82, 0.79].map((confidence, index) => ({
+      variant: String(index), text: '31/31/14/25/15/2', confidence
+    })))
+    expect(selected.confidences.def).toBeGreaterThanOrEqual(0.9)
+  })
+
   it('uses multi-pass consensus to correct a 14 misread as 18 and flags only the disagreement', () => {
     const selected = selectIvOcrConsensus([
       { variant: 'threshold-90', text: '31/31/18/25/15/2', confidence: 0.94 },
@@ -159,7 +183,7 @@ describe('real PokeMMO screenshot milestone', () => {
     expect(result.nature.value).toBe('Naive')
     expect(result.alpha.value).toBe(true)
     expect(result.hiddenAbility.value).toBe(true)
-    expect(result.status).toBe('Verified')
+    expect(result.status, JSON.stringify({ ivs: result.ivs, issues: result.issues })).toBe('Verified')
     expect(result.hiddenAbility.raw).toContain('gold=')
     expect(result.hiddenAbility.raw).toContain('diamond=')
   }, 20_000)

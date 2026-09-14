@@ -54,10 +54,15 @@ async function preprocessSpeciesVariants(buffer: Buffer): Promise<Array<{ varian
 
 async function preprocessIvVariants(buffer: Buffer): Promise<Array<{ variant: string; image: Buffer }>> {
   const base = sharp(buffer).resize({ height: 240, kernel: 'lanczos3' }).grayscale().normalize()
-  return Promise.all([90, 100, 110].map(async (threshold) => ({
+  const thresholds = await Promise.all([90, 100, 110].map(async (threshold) => ({
     variant: `threshold-${threshold}`,
     image: await base.clone().threshold(threshold).png().toBuffer()
   })))
+  // Preserve stroke shapes in independent views instead of relying only on nearby thresholds.
+  return [...thresholds,
+    { variant: 'nearest-original', image: await sharp(buffer).resize({ height: 160, kernel: 'nearest' }).png().toBuffer() },
+    { variant: 'grayscale-inverted', image: await sharp(buffer).resize({ height: 180, kernel: 'lanczos3' }).grayscale().normalize().negate().extend({ top: 16, bottom: 16, left: 16, right: 16, background: 'white' }).png().toBuffer() }
+  ]
 }
 
 async function rgbStats(buffer: Buffer): Promise<RgbStats> {
@@ -122,6 +127,7 @@ export function detectGenderFromRgb(stats: RgbStats, threshold: number, genderle
 
 export class RecognitionEngine {
   private workerPromise: Promise<Worker> | null = null
+  private ocrQueue: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly language: { langPath: string; gzip: boolean },
@@ -136,10 +142,14 @@ export class RecognitionEngine {
   }
 
   private async ocr(buffer: Buffer, whitelist: string): Promise<OcrReading> {
-    const worker = await this.worker()
-    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: whitelist })
-    const result = await worker.recognize(buffer)
-    return { text: result.data.text.trim(), confidence: clamp(result.data.confidence / 100) }
+    const reading = this.ocrQueue.then(async () => {
+      const worker = await this.worker()
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: whitelist })
+      const result = await worker.recognize(buffer)
+      return { text: result.data.text.trim(), confidence: clamp(result.data.confidence / 100) }
+    })
+    this.ocrQueue = reading.then(() => undefined, () => undefined)
+    return reading
   }
 
   private async ocrIvs(buffer: Buffer) {
@@ -259,6 +269,7 @@ export class RecognitionEngine {
   }
 
   async dispose(): Promise<void> {
+    await this.ocrQueue
     const worker = await this.workerPromise
     this.workerPromise = null
     if (worker) await worker.terminate()

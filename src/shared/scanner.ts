@@ -161,11 +161,25 @@ export function selectIvOcrConsensus(candidates: IvOcrCandidate[]): IvOcrSelecti
     return average(right) - average(left)
   })
   const winner = ranked[0] as typeof valid
-  const values = winner[0]!.parsed.values
+  // Vote per stat: independent errors in separate digits must not make an entire row win.
+  const values = Object.fromEntries(STATS.map((stat) => {
+    const votes = new Map<number, { count: number; confidence: number }>()
+    for (const entry of valid) {
+      const value = entry.parsed.values[stat]
+      const vote = votes.get(value) ?? { count: 0, confidence: 0 }
+      vote.count += 1; vote.confidence += entry.candidate.confidence; votes.set(value, vote)
+    }
+    const rankedVotes = [...votes].sort((a, b) => b[1].count - a[1].count || b[1].confidence - a[1].confidence || a[0] - b[0])
+    return [stat, rankedVotes[0]![0]]
+  })) as Record<Stat, number>
   const winnerConfidence = winner.reduce((sum, entry) => sum + entry.candidate.confidence, 0) / winner.length
   const confidences = Object.fromEntries(STATS.map((stat) => {
     const agreement = valid.filter((entry) => entry.parsed.values[stat] === values[stat]).length / valid.length
-    if (winner.length >= 2 && agreement === 1) return [stat, clamp(0.94 + winnerConfidence * 0.05, 0.94, 0.99)]
+    const strongAgreement = valid.filter((entry) => entry.parsed.values[stat] === values[stat] && entry.candidate.confidence >= 0.6)
+    if (strongAgreement.length >= 2 && agreement === 1 && valid.length >= Math.ceil(candidates.length * 0.6)) {
+      const confidence = strongAgreement.reduce((sum, entry) => sum + entry.candidate.confidence, 0) / strongAgreement.length
+      return [stat, clamp(0.94 + confidence * 0.05, 0.94, 0.99)]
+    }
     if (valid.length === 1) return [stat, clamp(0.74 + winnerConfidence * 0.12, 0.74, 0.88)]
     return [stat, clamp(0.62 + agreement * 0.25, 0.62, 0.89)]
   })) as Record<Stat, number>

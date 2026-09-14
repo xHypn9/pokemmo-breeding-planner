@@ -12,6 +12,15 @@ const target: BreedingTarget = {
 }
 
 describe('planner and validator', () => {
+  it('retains a valid goal produced at the exact search budget boundary', () => {
+    const plan = new BreedingPlanner().calculate([
+      pokemon(1, 443, 'Female', exactTargetIvs, 'Jolly', true, true),
+      pokemon(2, 443, 'Male', exactTargetIvs, 'Adamant', true, false)
+    ], target, { maxStates: 3 })
+    expect(plan.valid).toBe(true)
+    expect(plan.steps).toHaveLength(1)
+    expect(plan.missingBreeders).toHaveLength(0)
+  })
   it('returns zero breeds when the exact selected Pokémon is already owned and satisfies the target', () => {
     const hydreigonTarget: BreedingTarget = {
       speciesId: 635,
