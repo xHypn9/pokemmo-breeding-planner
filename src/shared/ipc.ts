@@ -15,10 +15,30 @@ export const IPC = {
   dialogSave: 'dialog:save', dialogOpen: 'dialog:open', settingsGet: 'settings:get', settingsSet: 'settings:set',
   devLoadDataset: 'dev:load-dataset', appInfo: 'app:info', spriteGet: 'sprite:get',
   scannerSources: 'scanner:sources', scannerPreview: 'scanner:preview', scannerScanCurrent: 'scanner:scan-current',
-  scannerFingerprint: 'scanner:fingerprint', scannerSetHotkey: 'scanner:set-hotkey', scannerCaptured: 'scanner:captured', scannerError: 'scanner:error'
+  scannerFingerprint: 'scanner:fingerprint', scannerSetHotkey: 'scanner:set-hotkey', scannerCaptured: 'scanner:captured', scannerError: 'scanner:error',
+  cloudGetState: 'cloud:get-state', cloudConnect: 'cloud:connect', cloudDisconnect: 'cloud:disconnect', cloudUpload: 'cloud:upload',
+  cloudListBackups: 'cloud:list-backups', cloudRestore: 'cloud:restore', cloudChanged: 'cloud:changed'
 } as const
 
 export interface FileFilter { name: string; extensions: string[] }
+export interface CloudBackupState {
+  connected: boolean
+  configured: boolean
+  dirty: boolean
+  busy: 'idle' | 'connecting' | 'uploading' | 'restoring' | 'disconnecting'
+  lastUploadAt: string | null
+  lastUploadFileId: string | null
+  lastError: string | null
+  remoteBackupCount: number
+}
+export interface CloudBackupEntry {
+  id: string
+  name: string
+  createdAt: string
+  size: number | null
+  appVersion: string | null
+  schemaVersion: number | null
+}
 
 export interface DesktopApi {
   species: { list(): Promise<Species[]> }
@@ -43,6 +63,15 @@ export interface DesktopApi {
   data: { exportJson(path: string): Promise<string>; importJson(path: string): Promise<JsonExport> }
   dialog: { save(defaultPath: string, filters: FileFilter[]): Promise<string | null>; open(filters: FileFilter[]): Promise<string | null> }
   settings: { get(): Promise<Record<string, unknown>>; set(key: string, value: unknown): Promise<void> }
+  cloud: {
+    getState(): Promise<CloudBackupState>
+    connect(): Promise<CloudBackupState>
+    disconnect(): Promise<CloudBackupState>
+    upload(): Promise<CloudBackupState>
+    listBackups(): Promise<CloudBackupEntry[]>
+    restore(fileId: string): Promise<{ state: CloudBackupState; manifest: { appVersion: string; schemaVersion: number; createdAt: string } }>
+    onChanged(callback: (state: CloudBackupState) => void): () => void
+  }
   dev: { loadDataset(): Promise<number> }
   app: { info(): Promise<{ version: string; development: boolean; databasePath: string; settingsPath: string }> }
   sprite: { get(speciesId: number): Promise<string | null> }

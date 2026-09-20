@@ -32,7 +32,7 @@ export class AppRepository {
   private readonly simulator = new BreedingSimulator(this.rules)
   private readonly validator = new PlanValidator(this.rules, this.simulator)
 
-  constructor(private readonly database: AppDatabase) {}
+  constructor(private readonly database: AppDatabase, private readonly onPersistentChange: () => void = () => undefined) {}
   private get db(): DatabaseSync { return this.database.db }
 
   boxes(): BoxRecord[] {
@@ -285,6 +285,10 @@ export class AppRepository {
     this.db.prepare('INSERT INTO app_settings(key,value_json,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at').run(key, JSON.stringify(value), now())
   }
 
+  clearSettingsPrefix(prefix: string): void {
+    this.db.prepare("DELETE FROM app_settings WHERE key LIKE ? ESCAPE '\\'").run(`${prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`)
+  }
+
   exportData(): JsonExport {
     return { schemaVersion: APP_SCHEMA_VERSION, exportedAt: now(), boxes: this.boxes(), pokemon: this.inventory(), plans: this.plans().map((entry) => this.plan(entry.id)), settings: this.settings() }
   }
@@ -360,5 +364,6 @@ export class AppRepository {
 
   private log(action: string, entityType: string, entityId: string | null, data: unknown): void {
     this.db.prepare('INSERT INTO operation_history(action,entity_type,entity_id,data_json,created_at) VALUES(?,?,?,?,?)').run(action, entityType, entityId, JSON.stringify(data), now())
+    this.onPersistentChange()
   }
 }

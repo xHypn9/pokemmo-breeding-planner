@@ -1,7 +1,14 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type DesktopApi } from '../shared/ipc'
 
-const invoke = <T>(channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args) as Promise<T>
+const invoke = async <T>(channel: string, ...args: unknown[]): Promise<T> => {
+  try { return await ipcRenderer.invoke(channel, ...args) as T }
+  catch (error) {
+    const raw = error instanceof Error ? error.message : String(error)
+    const readable = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/, '')
+    throw new Error(readable)
+  }
+}
 
 const api: DesktopApi = {
   species: { list: () => invoke(IPC.speciesList) },
@@ -21,6 +28,15 @@ const api: DesktopApi = {
   data: { exportJson: (path) => invoke(IPC.exportJson, path), importJson: (path) => invoke(IPC.importJson, path) },
   dialog: { save: (defaultPath, filters) => invoke(IPC.dialogSave, defaultPath, filters), open: (filters) => invoke(IPC.dialogOpen, filters) },
   settings: { get: () => invoke(IPC.settingsGet), set: (key, value) => invoke(IPC.settingsSet, key, value) },
+  cloud: {
+    getState: () => invoke(IPC.cloudGetState), connect: () => invoke(IPC.cloudConnect), disconnect: () => invoke(IPC.cloudDisconnect),
+    upload: () => invoke(IPC.cloudUpload), listBackups: () => invoke(IPC.cloudListBackups), restore: (fileId) => invoke(IPC.cloudRestore, fileId),
+    onChanged: (callback) => {
+      const listener = (_event: IpcRendererEvent, state: Parameters<typeof callback>[0]) => callback(state)
+      ipcRenderer.on(IPC.cloudChanged, listener)
+      return () => ipcRenderer.removeListener(IPC.cloudChanged, listener)
+    }
+  },
   dev: { loadDataset: () => invoke(IPC.devLoadDataset) }, app: { info: () => invoke(IPC.appInfo) },
   sprite: { get: (speciesId) => invoke(IPC.spriteGet, speciesId) },
   scanner: {

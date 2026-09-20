@@ -13,6 +13,19 @@ const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
 describe('SQLite repositories and atomic breed completion', () => {
+  it('reports persistent user-data changes through the centralized repository hook', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pbp-dirty-hook-test-')); directories.push(directory)
+    const database = new AppDatabase(join(directory, 'test.sqlite')); let changes = 0
+    const repository = new AppRepository(database, () => { changes++ })
+    repository.createBox('Cloud dirty test')
+    expect(changes).toBe(1)
+    repository.setSetting('scanner.hotkey', 'F2')
+    expect(changes).toBe(1)
+    repository.clearSettingsPrefix('scanner.')
+    expect(repository.settings()).toEqual({})
+    database.close()
+  })
+
   it('persists saved plans and reservations across restart, then releases parents when deleted', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pbp-reserved-test-')); directories.push(directory)
     const path = join(directory, 'test.sqlite')

@@ -5,6 +5,10 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    define: {
+      __GOOGLE_OAUTH_CLIENT_ID__: JSON.stringify(process.env.GOOGLE_OAUTH_CLIENT_ID ?? ''),
+      __GOOGLE_OAUTH_CLIENT_SECRET__: JSON.stringify(process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? '')
+    },
     build: { rollupOptions: { input: resolve('src/main/index.ts'), external: ['electron', 'sharp', 'tesseract.js', '@tesseract.js-data/eng'] } }
   },
   preload: {

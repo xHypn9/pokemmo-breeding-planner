@@ -4,6 +4,7 @@ import type {
   AlphaRequirement, BreedingPlanTree, BreedingTarget, BoxRecord, DashboardStats, Gender, InventoryInput,
   InventoryPokemon, Nature, PlanNode, PlannerProgress, SavedPlan, SavedPlanSummary, Species, Stat
 } from '../../shared/types'
+import type { CloudBackupEntry, CloudBackupState } from '../../shared/ipc'
 import { nodeMeetsTargetIv, normalizeTargetIvText, parseTargetIvText, targetIvIsExact, targetIvLabel } from '../../shared/target'
 import { useTextPrompt } from './components/useTextPrompt'
 import { Sprite } from './components/Sprite'
@@ -51,16 +52,50 @@ export function App() {
       <nav>{(Object.keys(labels) as View[]).map((key) => <button key={key} className={view === key ? 'active' : ''} onClick={() => navigate(key)}>{labels[key]}</button>)}</nav>
       <div className="sidebar-foot"><small>{data.inventory.filter((p) => p.status === 'Available' && p.breedingEnabled).length} available</small><small>{data.plans.filter((p) => ['Ready', 'In Progress'].includes(p.status)).length} active plans</small></div>
     </aside>
-    <main><header><h1>{labels[view]}</h1>{notice && <button className="notice" onClick={() => setNotice('')}>{notice} ×</button>}</header>
+    <main><header><h1>{labels[view]}</h1><div className="header-actions">{notice && <button className="notice" onClick={() => setNotice('')}>{notice} ×</button>}<CloudControl setNotice={setNotice} /></div></header>
       {visited.has('dashboard') && <div className="view-pane" hidden={view !== 'dashboard'}><Dashboard active={view === 'dashboard'} onNavigate={navigate} /></div>}
       {visited.has('inventory') && <div className="view-pane" hidden={view !== 'inventory'}><InventoryView {...data} run={run} /></div>}
       {visited.has('scanner') && <div className="view-pane" hidden={view !== 'scanner'}><ScannerView active={view === 'scanner'} species={data.species} boxes={data.boxes} refresh={data.refresh} setNotice={setNotice} /></div>}
       {visited.has('planner') && <div className="view-pane" hidden={view !== 'planner'}><PlannerView {...data} run={run} onOpenSaved={openSaved} initialTarget={plannerTarget} /></div>}
       {visited.has('plans') && <div className="view-pane" hidden={view !== 'plans'}><PlansView plans={data.plans} species={data.species} opened={openedPlan} setOpened={setOpenedPlan} refresh={data.refresh} setNotice={setNotice} onRecalculate={(target) => { setPlannerTarget(structuredClone(target)); navigate('planner') }} /></div>}
       {visited.has('backup') && <div className="view-pane" hidden={view !== 'backup'}><BackupView run={run} /></div>}
-      {visited.has('settings') && <div className="view-pane" hidden={view !== 'settings'}><SettingsView run={run} /></div>}
+      {visited.has('settings') && <div className="view-pane" hidden={view !== 'settings'}><SettingsView run={run} setNotice={setNotice} /></div>}
     </main>
   </div>
+}
+
+function useCloudState(): [CloudBackupState | null, () => Promise<void>] {
+  const [state, setState] = useState<CloudBackupState | null>(null)
+  const refresh = async () => setState(await window.desktopApi.cloud.getState())
+  useEffect(() => {
+    void refresh()
+    return window.desktopApi.cloud.onChanged(setState)
+  }, [])
+  return [state, refresh]
+}
+
+function CloudControl({ setNotice }: { setNotice(message: string): void }) {
+  const [state] = useCloudState()
+  const busy = state?.busy !== 'idle'
+  const title = !state?.connected ? 'Google Drive not connected'
+    : state.busy === 'uploading' ? 'Uploading backup...'
+      : state.busy === 'connecting' ? 'Connecting Google Drive...'
+        : state.busy === 'restoring' ? 'Restoring cloud backup...'
+          : state.lastError ? state.lastError
+            : state.dirty ? 'Local changes not backed up'
+              : `Cloud backup up to date${state.lastUploadAt ? ` · Last upload: ${new Date(state.lastUploadAt).toLocaleString()}` : ''}`
+  const action = async () => {
+    if (!state || busy) return
+    try {
+      const next = state.connected ? await window.desktopApi.cloud.upload() : await window.desktopApi.cloud.connect()
+      if (!state.connected && next.remoteBackupCount > 0) setNotice(`${next.remoteBackupCount} cloud backup${next.remoteBackupCount === 1 ? '' : 's'} available. Restore from Settings if this is a new PC.`)
+      else setNotice(state.connected ? 'Cloud backup uploaded successfully' : 'Google Drive connected')
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
+  }
+  const marker = busy ? '…' : !state?.connected ? '' : state.lastError ? '!' : state.dirty ? '↑' : '✓'
+  return <button className={`cloud-button ${!state?.connected ? 'disconnected' : state.lastError ? 'error' : state.dirty ? 'dirty' : 'synced'} ${busy ? 'busy' : ''}`} title={title} aria-label={title} disabled={busy} onClick={() => void action()}>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 18.2h10.1a4.2 4.2 0 0 0 .7-8.3A6.3 6.3 0 0 0 6.1 8.5a4.9 4.9 0 0 0 1.1 9.7Z" /></svg><span>{marker}</span>
+  </button>
 }
 
 function Dashboard({ active, onNavigate }: { active: boolean; onNavigate(view: View): void }) {
@@ -290,8 +325,34 @@ function BackupView({ run }: { run(operation: () => Promise<unknown>, success: s
   return <section className="backup-grid"><div className="panel backup-card"><span className="empty-icon">⬡</span><h2>Single-file backup</h2><p>SQLite snapshot plus manifest and schema version in a portable `.pbpbackup` archive.</p><button className="primary" onClick={() => void backup()}>Create Backup</button><button onClick={() => void restore()}>Restore Backup</button></div><div className="panel backup-card"><span className="empty-icon">↶</span><h2>Accidental breed recovery</h2><p>Breed Completed creates a validated automatic SQLite snapshot first. Restore the latest one here.</p><button onClick={() => void undoLast()}>Restore Latest Safety Snapshot</button></div><div className="panel backup-card"><span className="empty-icon">{'{ }'}</span><h2>Readable JSON</h2><p>Versioned inventory, boxes, targets, plans and settings. Imports are validated before writing.</p><button onClick={() => void exportJson()}>Export JSON</button><button onClick={() => void importJson()}>Import JSON</button></div></section>
 }
 
-function SettingsView({ run }: { run(operation: () => Promise<unknown>, success: string): Promise<void> }) {
+function SettingsView({ run, setNotice }: { run(operation: () => Promise<unknown>, success: string): Promise<void>; setNotice(message: string): void }) {
   const [info, setInfo] = useState<{ version: string; development: boolean; databasePath: string; settingsPath: string } | null>(null)
   useEffect(() => { void window.desktopApi.app.info().then(setInfo) }, [])
-  return <section><div className="panel settings"><h2>Local data</h2><dl><dt>Version</dt><dd>{info?.version}</dd><dt>Database</dt><dd>{info?.databasePath}</dd><dt>Settings INI</dt><dd>{info?.settingsPath}</dd><dt>Mode</dt><dd>{info?.development ? 'Development (isolated database)' : 'Production'}</dd><dt>Ruleset</dt><dd>pokemmo-v1-2026-08-23</dd><dt>Species dataset</dt><dd>649 species, generated and bundled offline</dd></dl>{info?.development && <button onClick={() => void run(() => window.desktopApi.dev.loadDataset(), 'Loaded 50 development breeders')}>Load Development Dataset</button>}</div></section>
+  return <section className="settings-stack"><CloudBackupSettings setNotice={setNotice} /><div className="panel settings"><h2>Local data</h2><dl><dt>Version</dt><dd>{info?.version}</dd><dt>Database</dt><dd>{info?.databasePath}</dd><dt>Settings INI</dt><dd>{info?.settingsPath}</dd><dt>Mode</dt><dd>{info?.development ? 'Development (isolated database)' : 'Production'}</dd><dt>Ruleset</dt><dd>pokemmo-v1-2026-08-23</dd><dt>Species dataset</dt><dd>649 species, generated and bundled offline</dd></dl>{info?.development && <button onClick={() => void run(() => window.desktopApi.dev.loadDataset(), 'Loaded 50 development breeders')}>Load Development Dataset</button>}</div></section>
+}
+
+function CloudBackupSettings({ setNotice }: { setNotice(message: string): void }) {
+  const [state, refresh] = useCloudState()
+  const [backups, setBackups] = useState<CloudBackupEntry[] | null>(null)
+  const [loadingBackups, setLoadingBackups] = useState(false)
+  const busy = state?.busy !== 'idle'
+  const execute = async (operation: () => Promise<unknown>, success: string) => {
+    try { await operation(); await refresh(); setNotice(success) } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
+  }
+  const showBackups = async () => {
+    setLoadingBackups(true)
+    try { setBackups(await window.desktopApi.cloud.listBackups()) } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
+    finally { setLoadingBackups(false) }
+  }
+  const restore = async (entry: CloudBackupEntry) => {
+    if (!confirm('This will replace your current Pokémon inventory and all saved breeding plans with the selected cloud backup.')) return
+    await execute(() => window.desktopApi.cloud.restore(entry.id), 'Cloud backup restored. The application will restart.')
+  }
+  return <><div className="panel settings cloud-settings"><div className="panel-title"><h2>Cloud Backup</h2><span className={`status ${state?.connected ? 'available' : 'consumed'}`}>{state?.connected ? 'Connected' : 'Not connected'}</span></div>
+    <dl><dt>Google Drive</dt><dd>{state?.connected ? 'Connected · private appDataFolder only' : state?.configured ? 'Ready to connect' : 'OAuth Client ID not configured'}</dd><dt>Local state</dt><dd>{state?.dirty ? 'Local changes not backed up' : 'Cloud backup up to date'}</dd><dt>Last backup</dt><dd>{state?.lastUploadAt ? new Date(state.lastUploadAt).toLocaleString() : 'Never'}</dd><dt>Cloud versions</dt><dd>{state?.remoteBackupCount ?? 0} detected</dd></dl>
+    {state?.lastError && <p className="cloud-error">{state.lastError}</p>}
+    <div className="actions-row">{!state?.connected ? <button className="primary" disabled={busy} onClick={() => void execute(() => window.desktopApi.cloud.connect(), 'Google Drive connected')}>Connect Google Drive</button> : <><button className="primary" disabled={busy} onClick={() => void execute(() => window.desktopApi.cloud.upload(), 'Cloud backup uploaded successfully')}>Upload now</button><button disabled={busy || loadingBackups} onClick={() => void showBackups()}>{loadingBackups ? 'Loading…' : 'Restore from cloud'}</button><button className="danger" disabled={busy} onClick={() => confirm('Disconnect Google Drive from this PC? Cloud backups will not be deleted.') && void execute(() => window.desktopApi.cloud.disconnect(), 'Google Drive disconnected')}>Disconnect</button></>}</div>
+    <p className="hint">Uploads are manual. Scanner settings, calibration, hotkeys and settings.ini remain local to this PC.</p>
+  </div>
+  {backups && <div className="modal-backdrop"><div className="modal cloud-backup-modal"><div className="panel-title"><h2>Restore from Google Drive</h2><button onClick={() => setBackups(null)}>×</button></div>{backups.length === 0 ? <p>No cloud backups are available.</p> : <div className="cloud-backup-list">{backups.map((entry) => <button key={entry.id} onClick={() => void restore(entry)}><b>{new Date(entry.createdAt).toLocaleString()}</b><span>{entry.appVersion ? `v${entry.appVersion}` : 'App version unknown'} · {entry.schemaVersion ? `schema ${entry.schemaVersion}` : 'schema unknown'}</span><small>{entry.name}</small></button>)}</div>}<div className="modal-actions"><button onClick={() => setBackups(null)}>Cancel</button></div></div></div>}</>
 }

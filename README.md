@@ -3,7 +3,7 @@
 > [!WARNING]
 > **Work in progress / progetto ancora in sviluppo.** This is an experimental, unofficial build and may contain incomplete features or planner/scanner defects. Keep backups of important inventory data and verify every breeding plan in game before consuming Pokémon.
 
-An unofficial, fully local Windows desktop application for managing real breeder inventory and producing deterministic PokeMMO breeding trees. It does not connect to the PokeMMO client, GTL or any cloud service.
+An unofficial, local-first Windows desktop application for managing real breeder inventory and producing deterministic PokeMMO breeding trees. It never connects to the PokeMMO client or GTL. Optional manual Google Drive backup uses only the private `appDataFolder` scope.
 
 The planner treats inventory Pokémon as consumable resources. A Pokémon ID can occur in only one branch. Every candidate plan is independently re-simulated from leaves to root; the UI never labels a target valid when an IV, nature, Alpha state or HA requirement depends on RNG.
 
@@ -12,6 +12,7 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 - Persistent scanner preferences in `settings.ini` under the application user-data folder: shortcut, enabled state, destination box, debug options and calibration. A saved enabled shortcut is restored when PokeMMO and the saved destination box are available.
 - Planner starts empty: choose the species; IVs and nature are ignored by default, HA and type default to Any.
 - In-app dialogs save breeding plans and collect observed IVs/nature. Saved plans reserve their inventory Pokémon across restarts; deleting a plan releases unused parents.
+- Optional manual Google Drive backup through system-browser OAuth 2.0, PKCE and loopback redirect. The cloud icon reports local dirty state; uploads retain the newest 10 versions and restore replaces the complete SQLite database only after existing integrity checks and a local safety snapshot.
 
 
 - Dense inventory with Boxes, combined filters, sortable columns, edits, deletion and bulk Box/Nature/Alpha/HA updates. An owned Pokémon can be marked `Unavailable` individually or in bulk: it stays in My Pokémon but is excluded from every Planner search until re-enabled.
@@ -49,7 +50,7 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 - `@xyflow/react`, Zod, Sharp, Tesseract.js with bundled English data, Vitest and electron-builder/NSIS
 - `nodeIntegration: false`, `contextIsolation: true`, renderer sandbox, CommonJS preload, frozen `contextBridge` API
 - validated narrow IPC handlers; database, backup, filesystem and sprite cache live in the main process
-- production CSP blocks remote scripts and connections; no remote code is loaded
+- production CSP blocks remote scripts and renderer connections; Google OAuth and Drive requests are made only by the Electron main process and no remote code is loaded
 - personal SQLite databases, backups, scanner debug output, development profiles and user-provided screenshots are excluded from the public repository
 
 ## Development
@@ -140,6 +141,28 @@ The installed application directory never contains user data, and uninstall does
 
 JSON import validates top-level shape, IDs, foreign references, species/gender, all IVs/natures, and every imported breeding plan before starting the replacement transaction.
 
+### Google Drive developer setup
+
+Cloud backup is optional and does not require Google Drive Desktop or a remote application server. It requests only `https://www.googleapis.com/auth/drive.appdata`; backups are private application data and do not appear in My Drive.
+
+1. Create or select a project in [Google Cloud Console](https://console.cloud.google.com/).
+2. Enable **Google Drive API v3** for that project.
+3. Configure the OAuth consent screen. During development/testing, add the Google accounts that may sign in as test users.
+4. Create an OAuth Client ID whose application type is **Desktop app**.
+5. Set the desktop client's ID and secret in the shell used to build the application. Google requires both values at its token endpoint. They are injected into the packaged main-process bundle and must never be committed to source control:
+
+   ```powershell
+   $env:GOOGLE_OAUTH_CLIENT_ID = '000000000000-example.apps.googleusercontent.com'
+   $env:GOOGLE_OAUTH_CLIENT_SECRET = 'GOCSPX-example'
+   pnpm build
+   # or: pnpm dist
+   ```
+
+   Runtime `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` environment variables override the build values for local development. No OAuth credential, access token or refresh token belongs in the repository.
+6. Start the application and choose **Connect Google Drive**. Google opens in the system browser and returns to a random `127.0.0.1` loopback port using PKCE and verified `state`.
+
+The refresh token is encrypted with Electron `safeStorage` and stored separately below Electron `userData/cloud`. If OS-backed encryption is unavailable, the app refuses to persist it. `settings.ini`, scanner calibration, hotkey and PC-specific preferences remain local. Upload is always manual: local database writes only mark the cloud state dirty.
+
 ## Planner behavior
 
 The planner first searches the real available inventory, then a mixed inventory/external frontier. Candidate states are bucketed by functional output and pruned using deterministic lexicographic objectives. Provenance sets must be disjoint at every merge.
@@ -162,6 +185,6 @@ A minimum target such as `25+` is propagated as a real IV domain, not as a displ
 
 ## V1 exclusions and roadmap
 
-Not implemented: Egg Moves, shiny/OT breeding, GTL prices, economic optimization, game-input automation, login/cloud sync, process-memory access or proprietary client asset extraction. The domain model and ruleset boundary leaves room for those future modules without coupling them to inventory persistence or the UI.
+Not implemented: Egg Moves, shiny/OT breeding, GTL prices, economic optimization, game-input automation, automatic or bidirectional cloud synchronization, process-memory access or proprietary client asset extraction. Google Drive support is intentionally limited to explicit local-to-cloud upload and explicit cloud-to-local restore; databases are never merged.
 
 PokeMMO is a third-party game. This project is unofficial and uses no PokeMMO client code or proprietary assets.

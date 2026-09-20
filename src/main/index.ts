@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, safeStorage, session, shell } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,6 +12,9 @@ import { AppDatabase } from './database/Database'
 import { AppRepository } from './database/Repository'
 import { IniSettings } from './services/IniSettings'
 import { BackupService } from './services/BackupService'
+import { CloudBackupService, CloudStateStore } from './services/CloudBackupService'
+import { GoogleDriveService } from './services/GoogleDriveService'
+import { EncryptedRefreshTokenStore, GoogleOAuthService } from './services/GoogleOAuthService'
 import { SpriteProvider } from './services/SpriteProvider'
 import { ScannerService } from './services/ScannerService'
 import { RecognitionEngine } from './scanner/RecognitionEngine'
@@ -22,6 +25,8 @@ import {
 } from './validation'
 
 const dirname = fileURLToPath(new URL('.', import.meta.url))
+declare const __GOOGLE_OAUTH_CLIENT_ID__: string
+declare const __GOOGLE_OAUTH_CLIENT_SECRET__: string
 const development = !app.isPackaged
 const isolatedUserData = process.env.POKEMMO_PLANNER_USER_DATA
 if (isolatedUserData) app.setPath('userData', isolatedUserData)
@@ -31,6 +36,7 @@ let database: AppDatabase
 let repository: AppRepository
 let preferences: IniSettings
 let backup: BackupService
+let cloud: CloudBackupService | undefined
 let sprites: SpriteProvider
 let scanner: ScannerService
 let mainWindow: BrowserWindow | null = null
@@ -73,8 +79,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.dashboardStats, () => repository.dashboard())
   ipcMain.handle(IPC.historyList, () => repository.history())
   ipcMain.handle(IPC.backupCreate, (_event, path) => backup.create(pathSchema.parse(path)))
-  ipcMain.handle(IPC.backupRestore, (_event, path) => backup.restore(pathSchema.parse(path)))
-  ipcMain.handle(IPC.backupUndoLast, () => backup.restoreLatestSafetySnapshot())
+  ipcMain.handle(IPC.backupRestore, (_event, path) => { backup.restore(pathSchema.parse(path)); cloud?.markDirty() })
+  ipcMain.handle(IPC.backupUndoLast, () => { const restored = backup.restoreLatestSafetySnapshot(); cloud?.markDirty(); return restored })
   ipcMain.handle(IPC.exportJson, (_event, path) => {
     const destination = pathSchema.parse(path); writeFileSync(destination, `${JSON.stringify(repository.exportData(), null, 2)}\n`); return destination
   })
@@ -91,7 +97,19 @@ function registerIpc(): void {
     return result.canceled ? null : result.filePaths[0] ?? null
   })
   ipcMain.handle(IPC.settingsGet, () => preferences.get())
-  ipcMain.handle(IPC.settingsSet, (_event, key, value) => { const validKey = z.string().regex(/^[a-zA-Z0-9_.-]{1,80}$/).parse(key); preferences.set(validKey, value); repository.setSetting(validKey, value) })
+  ipcMain.handle(IPC.settingsSet, (_event, key, value) => { const validKey = z.string().regex(/^[a-zA-Z0-9_.-]{1,80}$/).parse(key); preferences.set(validKey, value) })
+  ipcMain.handle(IPC.cloudGetState, () => cloud?.state())
+  ipcMain.handle(IPC.cloudConnect, () => cloud?.connect())
+  ipcMain.handle(IPC.cloudDisconnect, () => cloud?.disconnect())
+  ipcMain.handle(IPC.cloudUpload, () => cloud?.upload())
+  ipcMain.handle(IPC.cloudListBackups, () => cloud?.listBackups())
+  ipcMain.handle(IPC.cloudRestore, async (_event, fileId) => {
+    const validId = z.string().regex(/^[A-Za-z0-9_-]{10,200}$/).parse(fileId)
+    if (!cloud) throw new Error('Cloud backup service is unavailable')
+    const result = await cloud.restore(validId)
+    setTimeout(() => { app.relaunch(); app.exit(0) }, 750)
+    return result
+  })
   ipcMain.handle(IPC.devLoadDataset, () => {
     if (!development) throw new Error('Development dataset is disabled in packaged builds')
     if (!repository.boxes().some((box) => box.name === 'Development Seed')) repository.createBox('Development Seed')
@@ -168,9 +186,21 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   const userData = app.getPath('userData'); mkdirSync(userData, { recursive: true })
   database = new AppDatabase(join(userData, 'data', 'planner.sqlite'))
-  repository = new AppRepository(database)
+  repository = new AppRepository(database, () => cloud?.markDirty())
   preferences = new IniSettings(join(userData, 'settings.ini'), repository.settings())
+  repository.clearSettingsPrefix('scanner.')
   backup = new BackupService(database, app.getVersion(), join(userData, 'safety-snapshots'))
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() || __GOOGLE_OAUTH_CLIENT_ID__.trim()
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim() || __GOOGLE_OAUTH_CLIENT_SECRET__.trim()
+  const tokenStore = new EncryptedRefreshTokenStore(join(userData, 'cloud', 'google-token.json'), {
+    isAvailable: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (value) => safeStorage.encryptString(value),
+    decrypt: (value) => safeStorage.decryptString(value)
+  })
+  const oauth = new GoogleOAuthService(clientId, tokenStore, (url) => shell.openExternal(url), fetch, 180_000, clientSecret)
+  const drive = new GoogleDriveService(oauth)
+  cloud = new CloudBackupService(oauth, drive, backup, new CloudStateStore(join(userData, 'cloud', 'state.json')))
+  cloud.onChange((state) => mainWindow?.webContents.send(IPC.cloudChanged, state))
   sprites = new SpriteProvider(join(userData, 'sprite-cache'))
   const language = app.isPackaged ? { langPath: join(process.resourcesPath, 'ocr'), gzip: true } : eng
   scanner = new ScannerService(new RecognitionEngine(language, join(userData, 'scanner-debug')), SPECIES)
@@ -194,6 +224,7 @@ app.whenReady().then(async () => {
     callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [csp] } })
   })
   createWindow()
+  void cloud.initialize()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
