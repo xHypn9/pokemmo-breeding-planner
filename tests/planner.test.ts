@@ -12,6 +12,26 @@ const target: BreedingTarget = {
 }
 
 describe('planner and validator', () => {
+  it.each([445, 81, 128])('supports ignored nature for species %s with zero, one or two IV constraints', (speciesId) => {
+    for (const values of [
+      { hp: null, atk: null, def: null, spAtk: null, spDef: null, speed: null },
+      { hp: 31, atk: null, def: null, spAtk: null, spDef: null, speed: null },
+      { hp: 31, atk: 31, def: null, spAtk: null, spDef: null, speed: null }
+    ]) {
+      const plan = new BreedingPlanner().calculate([], { ...target, speciesId, ivs: values, nature: null, alpha: 'Any', ha: 'Any' })
+      expect(plan.valid).toBe(true)
+      expect(plan.steps.length).toBeGreaterThan(0)
+      expect(plan.steps.every((step) => step.parentAItem.type !== 'Everstone' && step.parentBItem.type !== 'Everstone')).toBe(true)
+      expect(plan.missingBreeders.every((entry) => entry.nature === null)).toBe(true)
+    }
+  })
+
+  it('accepts any owned nature when nature is ignored', () => {
+    const plan = new BreedingPlanner().calculate([pokemon(1, 445, 'Female', exactTargetIvs, 'Hardy', true, true)], { ...target, nature: null })
+    expect(plan.steps).toHaveLength(0)
+    expect(plan.inventoryIds).toEqual([1])
+  })
+
   it('retains a valid goal produced at the exact search budget boundary', () => {
     const plan = new BreedingPlanner().calculate([
       pokemon(1, 443, 'Female', exactTargetIvs, 'Jolly', true, true),

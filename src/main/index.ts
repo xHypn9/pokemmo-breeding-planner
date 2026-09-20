@@ -10,6 +10,7 @@ import { DEFAULT_SCANNER_CALIBRATION } from '../shared/scanner'
 import type { BreedingPlanTree, InventoryInput, JsonExport } from '../shared/types'
 import { AppDatabase } from './database/Database'
 import { AppRepository } from './database/Repository'
+import { IniSettings } from './services/IniSettings'
 import { BackupService } from './services/BackupService'
 import { SpriteProvider } from './services/SpriteProvider'
 import { ScannerService } from './services/ScannerService'
@@ -28,6 +29,7 @@ else if (development) app.setPath('userData', join(app.getPath('appData'), 'Poke
 
 let database: AppDatabase
 let repository: AppRepository
+let preferences: IniSettings
 let backup: BackupService
 let sprites: SpriteProvider
 let scanner: ScannerService
@@ -88,8 +90,8 @@ function registerIpc(): void {
     const result = await dialog.showOpenDialog({ properties: ['openFile'], filters })
     return result.canceled ? null : result.filePaths[0] ?? null
   })
-  ipcMain.handle(IPC.settingsGet, () => repository.settings())
-  ipcMain.handle(IPC.settingsSet, (_event, key, value) => repository.setSetting(z.string().regex(/^[a-zA-Z0-9_.-]{1,80}$/).parse(key), value))
+  ipcMain.handle(IPC.settingsGet, () => preferences.get())
+  ipcMain.handle(IPC.settingsSet, (_event, key, value) => { const validKey = z.string().regex(/^[a-zA-Z0-9_.-]{1,80}$/).parse(key); preferences.set(validKey, value); repository.setSetting(validKey, value) })
   ipcMain.handle(IPC.devLoadDataset, () => {
     if (!development) throw new Error('Development dataset is disabled in packaged builds')
     if (!repository.boxes().some((box) => box.name === 'Development Seed')) repository.createBox('Development Seed')
@@ -109,7 +111,7 @@ function registerIpc(): void {
     })
     return repository.bulkCreatePokemon(inputs).length
   })
-  ipcMain.handle(IPC.appInfo, () => ({ version: app.getVersion(), development, databasePath: database.path }))
+  ipcMain.handle(IPC.appInfo, () => ({ version: app.getVersion(), development, databasePath: database.path, settingsPath: preferences.path }))
   ipcMain.handle(IPC.spriteGet, (_event, speciesId) => sprites.get(idSchema.parse(speciesId)))
   ipcMain.handle(IPC.scannerSources, () => scanner.sources())
   ipcMain.handle(IPC.scannerPreview, (_event, sourceId) => scanner.preview(z.string().min(1).max(300).parse(sourceId)))
@@ -167,6 +169,7 @@ app.whenReady().then(async () => {
   const userData = app.getPath('userData'); mkdirSync(userData, { recursive: true })
   database = new AppDatabase(join(userData, 'data', 'planner.sqlite'))
   repository = new AppRepository(database)
+  preferences = new IniSettings(join(userData, 'settings.ini'), repository.settings())
   backup = new BackupService(database, app.getVersion(), join(userData, 'safety-snapshots'))
   sprites = new SpriteProvider(join(userData, 'sprite-cache'))
   const language = app.isPackaged ? { langPath: join(process.resourcesPath, 'ocr'), gzip: true } : eng

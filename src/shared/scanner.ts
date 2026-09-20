@@ -176,7 +176,8 @@ export function selectIvOcrConsensus(candidates: IvOcrCandidate[]): IvOcrSelecti
   const confidences = Object.fromEntries(STATS.map((stat) => {
     const agreement = valid.filter((entry) => entry.parsed.values[stat] === values[stat]).length / valid.length
     const strongAgreement = valid.filter((entry) => entry.parsed.values[stat] === values[stat] && entry.candidate.confidence >= 0.6)
-    if (strongAgreement.length >= 2 && agreement === 1 && valid.length >= Math.ceil(candidates.length * 0.6)) {
+    const independentStrong = new Set(strongAgreement.filter((entry) => entry.candidate.confidence >= 0.8).map((entry) => entry.candidate.variant.replace(/-\d+$/, ''))).size >= 2
+    if (strongAgreement.length >= 2 && agreement === 1 && (valid.length >= Math.ceil(candidates.length * 0.6) || independentStrong)) {
       const confidence = strongAgreement.reduce((sum, entry) => sum + entry.candidate.confidence, 0) / strongAgreement.length
       return [stat, clamp(0.94 + confidence * 0.05, 0.94, 0.99)]
     }

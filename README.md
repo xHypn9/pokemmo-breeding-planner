@@ -9,8 +9,12 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 
 ## What works in V1
 
+- Persistent scanner preferences in `settings.ini` under the application user-data folder: shortcut, enabled state, destination box, debug options and calibration. A saved enabled shortcut is restored when PokeMMO and the saved destination box are available.
+- Planner starts empty: choose the species; IVs and nature are ignored by default, HA and type default to Any.
+- In-app dialogs save breeding plans and collect observed IVs/nature. Saved plans reserve their inventory Pokémon across restarts; deleting a plan releases unused parents.
+
+
 - Dense inventory with Boxes, combined filters, sortable columns, edits, deletion and bulk Box/Nature/Alpha/HA updates. An owned Pokémon can be marked `Unavailable` individually or in bulk: it stays in My Pokémon but is excluded from every Planner search until re-enabled.
-- Keyboard-friendly Quick Insert grid with TSV paste, row duplication, immediate validation, automatic species metadata and a scrollable keyboard-navigable autocomplete.
 - Fully local PokeMMO Box Scanner with window-only capture, normalized ROI calibration, offline OCR, visual Alpha/HA/gender detection, per-field confidence and editable review queue.
 - Direct ROI calibration on the full captured PokeMMO window: drag colored areas with the mouse and resize them from their corner handles; numeric percentages remain available for fine tuning.
 - Three-pass IV OCR with contrast variants and per-stat consensus; disagreements such as `14` versus `18` are corrected by majority and the affected stat is explicitly sent to review.
@@ -27,7 +31,7 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 - Per-stat target modes: `25+` means a guaranteed minimum from 25 through 31, while the `Exact` checkbox keeps a precise IV requirement. `0+` is unconstrained and cannot create a useless extra breeding tier.
 - New IV values from 0–30 default to minimum mode and normalize to a visible `+`; 31 is always Exact because no higher IV exists.
 - Planner searches show the current phase, explored states out of 18,000 and an elapsed timer; only one worker can run, so repeated Calculate clicks cannot restart or duplicate the computation.
-- Tabs are mounted lazily and then kept alive for the application session, preserving Planner work, Quick Insert rows, filters and Scanner review state while shared inventory data continues to refresh.
+- Tabs are mounted lazily and then kept alive for the application session, preserving Planner work, filters and Scanner review state while shared inventory data continues to refresh.
 - Box Scanner automatically discovers and accepts only the real PokeMMO window; the manual source picker and misleading static Offline label are removed.
 - Scanner calibration v2 captures complete information rows instead of narrow value offsets. Species and gender share the full name row; IVs and Nature use their complete labeled rows; HA requires both golden/orange Ability text and its cyan diamond, with mismatched cues sent to review.
 - Automatic discovery normalizes every Cyrillic or Greek lookalike used by the changing PokeMMO window title (for example `РokеMМO`) and reacquires the window if Electron changes its source ID between discovery and capture. Administrator privileges are not required.

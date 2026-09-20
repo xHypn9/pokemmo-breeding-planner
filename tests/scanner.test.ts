@@ -82,6 +82,20 @@ describe('scanner parsers', () => {
     expect(selected.confidences.def).toBeLessThan(0.9)
   })
 
+  it('accepts two independent high-confidence readings even if other passes are unreadable', () => {
+    const selected = selectIvOcrConsensus([
+      { variant: 'nearest-original', text: '31/31/14/25/15/2', confidence: 0.94 },
+      { variant: 'grayscale-inverted', text: '31/31/14/25/15/2', confidence: 0.91 },
+      ...['threshold-90', 'threshold-100', 'threshold-110'].map((variant) => ({ variant, text: '', confidence: 0 }))
+    ])
+    expect(selected.confidences.hp).toBeGreaterThan(0.9)
+    const conflict = selectIvOcrConsensus([
+      { variant: 'nearest-original', text: '31/31/14/25/15/2', confidence: 0.94 },
+      { variant: 'grayscale-inverted', text: '31/31/18/25/15/2', confidence: 0.91 }
+    ])
+    expect(conflict.confidences.def).toBeLessThan(0.9)
+  })
+
   it('accepts two strong agreeing readings supported by weaker unanimous passes', () => {
     const selected = selectIvOcrConsensus([0, 0.44, 0.82, 0.79].map((confidence, index) => ({
       variant: String(index), text: '31/31/14/25/15/2', confidence

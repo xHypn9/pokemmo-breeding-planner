@@ -1,20 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NATURES, PLANNER_MAX_STATES, STATS } from '../../shared/constants'
 import type {
   AlphaRequirement, BreedingPlanTree, BreedingTarget, BoxRecord, DashboardStats, Gender, InventoryInput,
   InventoryPokemon, Nature, PlanNode, PlannerProgress, SavedPlan, SavedPlanSummary, Species, Stat
 } from '../../shared/types'
 import { nodeMeetsTargetIv, normalizeTargetIvText, parseTargetIvText, targetIvIsExact, targetIvLabel } from '../../shared/target'
+import { useTextPrompt } from './components/useTextPrompt'
 import { Sprite } from './components/Sprite'
 import { PlanTree } from './components/PlanTree'
 import { ScannerView } from './components/ScannerView'
 
-type View = 'dashboard' | 'inventory' | 'quick' | 'scanner' | 'planner' | 'plans' | 'backup' | 'settings'
-const labels: Record<View, string> = { dashboard: 'Dashboard', inventory: 'My Pokémon', quick: 'Quick Insert', scanner: 'Box Scanner', planner: 'Planner', plans: 'Saved Plans', backup: 'Backup / Restore', settings: 'Settings' }
+type View = 'dashboard' | 'inventory' | 'scanner' | 'planner' | 'plans' | 'backup' | 'settings'
+const labels: Record<View, string> = { dashboard: 'Dashboard', inventory: 'My Pokémon', scanner: 'Box Scanner', planner: 'Planner', plans: 'Saved Plans', backup: 'Backup / Restore', settings: 'Settings' }
 const exactDefault = { hp: 31, atk: 31, def: 31, spAtk: 15, spDef: 31, speed: 31 }
-const exactModeDefault = { hp: true, atk: true, def: true, spAtk: false, spDef: true, speed: true }
-const defaultPlannerTarget = (): BreedingTarget => ({ speciesId: 445, ivs: { ...exactDefault }, ivExact: { ...exactModeDefault }, nature: 'Jolly', ha: 'Yes', alpha: 'Alpha', optimizer: 'balanced' })
+const defaultPlannerTarget = (): BreedingTarget => ({ speciesId: 0, ivs: { hp: null, atk: null, def: null, spAtk: null, spDef: null, speed: null }, nature: null, ha: 'Any', alpha: 'Any', optimizer: 'balanced' })
 const ivDraftsForTarget = (target: BreedingTarget): Record<Stat, string> => Object.fromEntries(STATS.map((stat) => [stat, target.ivs[stat] === null ? '' : targetIvLabel(target, stat)])) as Record<Stat, string>
 const inventoryDisplayStatus = (pokemon: InventoryPokemon): InventoryPokemon['status'] | 'Unavailable' => pokemon.status === 'Available' && !pokemon.breedingEnabled ? 'Unavailable' : pokemon.status
 const formatElapsed = (milliseconds: number): string => {
@@ -37,7 +36,7 @@ function useAsyncData() {
 
 export function App() {
   const [view, setView] = useState<View>('dashboard'); const [notice, setNotice] = useState<string>('')
-  const [visited, setVisited] = useState<Set<View>>(() => new Set(['dashboard']))
+  const [visited, setVisited] = useState<Set<View>>(() => new Set(['dashboard', 'scanner']))
   const [openedPlan, setOpenedPlan] = useState<SavedPlan | null>(null)
   const [plannerTarget, setPlannerTarget] = useState<BreedingTarget | null>(null)
   const data = useAsyncData()
@@ -55,7 +54,6 @@ export function App() {
     <main><header><h1>{labels[view]}</h1>{notice && <button className="notice" onClick={() => setNotice('')}>{notice} ×</button>}</header>
       {visited.has('dashboard') && <div className="view-pane" hidden={view !== 'dashboard'}><Dashboard active={view === 'dashboard'} onNavigate={navigate} /></div>}
       {visited.has('inventory') && <div className="view-pane" hidden={view !== 'inventory'}><InventoryView {...data} run={run} /></div>}
-      {visited.has('quick') && <div className="view-pane" hidden={view !== 'quick'}><QuickInsert {...data} run={run} /></div>}
       {visited.has('scanner') && <div className="view-pane" hidden={view !== 'scanner'}><ScannerView active={view === 'scanner'} species={data.species} boxes={data.boxes} refresh={data.refresh} setNotice={setNotice} /></div>}
       {visited.has('planner') && <div className="view-pane" hidden={view !== 'planner'}><PlannerView {...data} run={run} onOpenSaved={openSaved} initialTarget={plannerTarget} /></div>}
       {visited.has('plans') && <div className="view-pane" hidden={view !== 'plans'}><PlansView plans={data.plans} species={data.species} opened={openedPlan} setOpened={setOpenedPlan} refresh={data.refresh} setNotice={setNotice} onRecalculate={(target) => { setPlannerTarget(structuredClone(target)); navigate('planner') }} /></div>}
@@ -73,7 +71,7 @@ function Dashboard({ active, onNavigate }: { active: boolean; onNavigate(view: V
     {[['Available', stats.available], ['Alpha', stats.alpha], ['HA potential', stats.ha], ['Boxes', stats.boxes], ['Active plans', stats.activePlans]].map(([label, value]) => <div className="metric" key={label}><strong>{value}</strong><span>{label}</span></div>)}
   </div><div className="dashboard-grid"><div className="panel"><div className="panel-title"><h2>IV distribution</h2></div><div className="bar-list">{Object.entries(stats.ivBuckets).sort().map(([name, count]) => <div key={name}><span>{name}</span><i style={{ width: `${Math.max(4, count / Math.max(1, stats.available) * 100)}%` }} /><b>{count}</b></div>)}</div></div>
     <div className="panel"><div className="panel-title"><h2>Egg Groups</h2></div><div className="tag-cloud">{stats.eggGroups.slice(0, 14).map((group) => <span key={group.name}>{group.name} <b>{group.count}</b></span>)}</div></div></div>
-    <div className="actions-row"><button className="primary" onClick={() => onNavigate('quick')}>Quick Insert</button><button onClick={() => onNavigate('planner')}>Create target</button></div>
+    <div className="actions-row"><button className="primary" onClick={() => onNavigate('scanner')}>Box Scanner</button><button onClick={() => onNavigate('planner')}>Create target</button></div>
   </section>
 }
 
@@ -151,109 +149,10 @@ function PokemonModal({ value, species, boxes, onClose, onSave }: { value: Inven
     <label>Notes<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label><div className="modal-actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary">Save</button></div></form></div>
 }
 
-type GridRow = { species: string; gender: Gender; hp: string; atk: string; def: string; spAtk: string; spDef: string; speed: string; nature: Nature; alpha: boolean; ha: boolean; boxId: number | null }
-const blankRow = (alpha = true, boxId: number | null = null): GridRow => ({ species: '', gender: 'Female', hp: '', atk: '', def: '', spAtk: '', spDef: '', speed: '', nature: 'Jolly', alpha, ha: false, boxId })
-
-function SpeciesAutocomplete({ value, species, onChange, onPaste }: { value: string; species: Species[]; onChange(value: string): void; onPaste(event: ReactClipboardEvent<HTMLInputElement>): void }) {
-  const [open, setOpen] = useState(false); const [highlighted, setHighlighted] = useState(0)
-  const [position, setPosition] = useState<{ left: number; top: number; width: number } | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null); const menuRef = useRef<HTMLDivElement>(null)
-  const matches = useMemo(() => {
-    const query = value.trim().toLowerCase()
-    return species.filter((entry) => !query || entry.name.toLowerCase().includes(query) || entry.slug.includes(query))
-      .sort((a, b) => Number(!a.name.toLowerCase().startsWith(query)) - Number(!b.name.toLowerCase().startsWith(query)) || a.id - b.id)
-  }, [species, value])
-  useEffect(() => { setHighlighted(0) }, [value])
-  useEffect(() => { menuRef.current?.querySelector(`[data-option="${highlighted}"]`)?.scrollIntoView({ block: 'nearest' }) }, [highlighted])
-  const show = () => {
-    const rect = inputRef.current?.getBoundingClientRect(); if (!rect) return
-    const menuHeight = 270; const top = window.innerHeight - rect.bottom >= menuHeight ? rect.bottom + 3 : Math.max(8, rect.top - menuHeight - 3)
-    setPosition({ left: rect.left, top, width: Math.max(rect.width, 210) }); setOpen(true)
-  }
-  const choose = (entry: Species) => { onChange(entry.name); setOpen(false) }
-  return <div className="species-autocomplete"><input ref={inputRef} role="combobox" aria-autocomplete="list" aria-expanded={open} value={value} onFocus={show}
-    onBlur={() => window.setTimeout(() => setOpen(false), 120)} onPaste={onPaste}
-    onChange={(event) => { onChange(event.target.value); show() }}
-    onKeyDown={(event) => {
-      if (event.key === 'ArrowDown') { event.preventDefault(); show(); setHighlighted((index) => Math.min(matches.length - 1, index + 1)) }
-      else if (event.key === 'ArrowUp') { event.preventDefault(); show(); setHighlighted((index) => Math.max(0, index - 1)) }
-      else if (event.key === 'Enter' && open && matches[highlighted]) { event.preventDefault(); choose(matches[highlighted]) }
-      else if (event.key === 'Tab' && value.trim() && open && matches[highlighted] && value.toLowerCase() !== matches[highlighted].name.toLowerCase()) choose(matches[highlighted])
-      else if (event.key === 'Escape') { event.preventDefault(); setOpen(false) }
-    }} />
-    {open && position && createPortal(<div ref={menuRef} className="species-autocomplete-menu" role="listbox" style={position}>
-      {matches.length ? matches.map((entry, index) => <button type="button" role="option" aria-selected={index === highlighted} data-option={index} className={index === highlighted ? 'highlighted' : ''} key={entry.id}
-        onMouseEnter={() => setHighlighted(index)} onMouseDown={(event) => { event.preventDefault(); choose(entry) }}><span>{entry.name}</span><small>#{entry.id}</small></button>) : <div className="no-options">No matching Pokémon</div>}
-    </div>, document.body)}
-  </div>
-}
-
-function QuickInsert({ species, boxes, run }: ReturnType<typeof useAsyncData> & { run(operation: () => Promise<unknown>, success: string): Promise<void> }) {
-  const [defaultAlpha, setDefaultAlpha] = useState(true); const [currentBox, setCurrentBox] = useState<number | null>(boxes[0]?.id ?? null)
-  const [rows, setRows] = useState<GridRow[]>(() => Array.from({ length: 20 }, () => blankRow(true, null)))
-  const byName = useMemo(() => new Map(species.flatMap((entry) => [[entry.name.toLowerCase(), entry], [entry.slug.toLowerCase(), entry]])), [species])
-  const update = (index: number, patch: Partial<GridRow>) => setRows((old) => old.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row))
-  const errorFor = (row: GridRow): string | null => {
-    if (!row.species.trim()) return null
-    const meta = byName.get(row.species.trim().toLowerCase()); if (!meta) return 'Unknown species'
-    const allowed = meta.gender.kind === 'genderless' ? ['Genderless'] : meta.gender.femaleEighths === 0 ? ['Male'] : meta.gender.femaleEighths === 8 ? ['Female'] : ['Female', 'Male']
-    if (!allowed.includes(row.gender)) return `${meta.name} cannot be ${row.gender}`
-    for (const stat of STATS) { const value = Number(row[stat]); if (row[stat] === '' || !Number.isInteger(value) || value < 0 || value > 31) return `${stat} must be 0–31` }
-    return null
-  }
-  const paste = (startRow: number, startColumn: number, text: string) => {
-    const columns: Array<keyof GridRow> = ['species', 'gender', 'hp', 'atk', 'def', 'spAtk', 'spDef', 'speed', 'nature', 'alpha', 'ha', 'boxId']
-    const lines = text.replace(/\r/g, '').split('\n').filter(Boolean).map((line) => line.split('\t'))
-    setRows((old) => {
-      const next = [...old]; while (next.length < startRow + lines.length) next.push(blankRow(defaultAlpha, currentBox))
-      lines.forEach((cells, y) => { const row = { ...(next[startRow + y] as GridRow) }; cells.forEach((cell, x) => {
-        const key = columns[startColumn + x]; if (!key) return
-        if (key === 'alpha' || key === 'ha') (row as Record<string, unknown>)[key] = /^(true|yes|1|si|sì)$/i.test(cell)
-        else if (key === 'boxId') row.boxId = boxes.find((b) => b.name.toLowerCase() === cell.toLowerCase())?.id ?? (Number(cell) || currentBox)
-        else (row as Record<string, unknown>)[key] = cell
-      }); next[startRow + y] = row })
-      return next
-    })
-  }
-  const save = async () => {
-    const populated = rows.filter((row) => row.species.trim()); const errors = populated.map(errorFor).filter(Boolean)
-    if (errors.length) throw new Error(`${errors.length} invalid rows; first error: ${errors[0]}`)
-    const inputs: InventoryInput[] = populated.map((row) => ({ speciesId: byName.get(row.species.trim().toLowerCase())!.id, gender: row.gender, ivs: Object.fromEntries(STATS.map((stat) => [stat, Number(row[stat])])) as InventoryInput['ivs'], nature: row.nature, alpha: row.alpha, ha: row.ha, boxId: row.boxId, notes: '' }))
-    await run(() => window.desktopApi.inventory.bulkCreate(inputs), `${inputs.length} Pokémon imported`); setRows(Array.from({ length: 20 }, () => blankRow(defaultAlpha, currentBox)))
-  }
-  return <section><div className="toolbar"><label className="switch"><input type="checkbox" checked={defaultAlpha} onChange={(e) => setDefaultAlpha(e.target.checked)} />Default Alpha</label><label>Current box <select value={currentBox ?? ''} onChange={(e) => setCurrentBox(e.target.value ? Number(e.target.value) : null)}><option value="">No box</option>{boxes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label><button onClick={() => setRows((old) => [...old, blankRow(defaultAlpha, currentBox)])}>+ Row</button><span className="spacer" /><button className="primary" onClick={() => void save().catch((e) => alert(e.message))}>Save batch</button></div>
-    <div className="table-wrap quick-grid"><table><thead><tr><th>#</th><th>Species</th><th>Gender</th>{STATS.map((s) => <th key={s}>{s}</th>)}<th>Nature</th><th>Alpha</th><th>HA</th><th>Box</th><th /></tr></thead>
-      <tbody>{rows.map((row, index) => {
-        const error = errorFor(row)
-        return <tr key={index} className={error ? 'row-error' : ''} title={error ?? ''}>
-          <td>{index + 1}</td>
-          <td><SpeciesAutocomplete value={row.species} species={species}
-            onPaste={(event) => { const text = event.clipboardData.getData('text'); if (text.includes('\t') || text.includes('\n')) { event.preventDefault(); paste(index, 0, text) } }}
-            onChange={(value) => {
-              const meta = byName.get(value.toLowerCase())
-              let nextGender = row.gender
-              if (meta?.gender.kind === 'genderless') nextGender = 'Genderless'
-              else if (meta?.gender.kind === 'ratio' && meta.gender.femaleEighths === 0) nextGender = 'Male'
-              else if (meta?.gender.kind === 'ratio' && meta.gender.femaleEighths === 8) nextGender = 'Female'
-              update(index, { species: value, gender: nextGender, alpha: row.species ? row.alpha : defaultAlpha, boxId: row.species ? row.boxId : currentBox })
-            }} /></td>
-          <td><select value={row.gender} onChange={(event) => update(index, { gender: event.target.value as Gender })}><option>Female</option><option>Male</option><option>Genderless</option></select></td>
-          {STATS.map((stat, column) => <td key={stat}><input type="number" min="0" max="31" value={row[stat]}
-            onPaste={(event) => { const text = event.clipboardData.getData('text'); if (text.includes('\t') || text.includes('\n')) { event.preventDefault(); paste(index, column + 2, text) } }}
-            onChange={(event) => update(index, { [stat]: event.target.value })} /></td>)}
-          <td><select value={row.nature} onChange={(event) => update(index, { nature: event.target.value as Nature })}>{NATURES.map((nature) => <option key={nature}>{nature}</option>)}</select></td>
-          <td><input type="checkbox" checked={row.alpha} onChange={(event) => update(index, { alpha: event.target.checked })} /></td>
-          <td><input type="checkbox" checked={row.ha} onChange={(event) => update(index, { ha: event.target.checked })} /></td>
-          <td><select value={row.boxId ?? ''} onChange={(event) => update(index, { boxId: event.target.value ? Number(event.target.value) : null })}><option value="">—</option>{boxes.map((box) => <option key={box.id} value={box.id}>{box.name}</option>)}</select></td>
-          <td><button className="icon" onClick={() => setRows((old) => [...old.slice(0, index + 1), { ...row }, ...old.slice(index + 1)])}>Copy</button> <button className="icon danger" onClick={() => setRows((old) => old.filter((_, rowIndex) => rowIndex !== index))}>×</button></td>
-        </tr>
-      })}</tbody>
-    </table></div></section>
-}
-
 function PlannerView({ species, inventory, run, onOpenSaved, initialTarget }: ReturnType<typeof useAsyncData> & { run(operation: () => Promise<unknown>, success: string): Promise<void>; onOpenSaved(id: number): Promise<void>; initialTarget: BreedingTarget | null }) {
   const [target, setTarget] = useState<BreedingTarget>(() => initialTarget ? structuredClone(initialTarget) : defaultPlannerTarget())
   const [ivDrafts, setIvDrafts] = useState<Record<Stat, string>>(() => ivDraftsForTarget(initialTarget ?? defaultPlannerTarget()))
+  const [saveOpen, setSaveOpen] = useState(false); const [planName, setPlanName] = useState(''); const [saving, setSaving] = useState(false); const [saveError, setSaveError] = useState('')
   const [plan, setPlan] = useState<BreedingPlanTree | null>(null); const [progress, setProgress] = useState(''); const [selectedNode, setSelectedNode] = useState<PlanNode | null>(null)
   const [running, setRunning] = useState(false); const [workerProgress, setWorkerProgress] = useState<PlannerProgress | null>(null); const [elapsedMs, setElapsedMs] = useState(0)
   const worker = useRef<Worker | null>(null); const meta = species.find((entry) => entry.id === target.speciesId)
@@ -267,7 +166,7 @@ function PlannerView({ species, inventory, run, onOpenSaved, initialTarget }: Re
     return () => window.clearInterval(timer)
   }, [running])
   const calculate = () => {
-    if (worker.current || running) return
+    if (worker.current || running || !target.speciesId) return
     const invalidStat = STATS.find((stat) => !parseTargetIvText(ivDrafts[stat]).valid)
     if (invalidStat) { setProgress(`${invalidStat}: use a blank value, 0–31, or a minimum such as 25+`); return }
     setPlan(null); setSelectedNode(null); setProgress('Starting isolated planner worker…'); setWorkerProgress(null); setElapsedMs(0); workerStartedAt.current = performance.now(); setRunning(true)
@@ -291,9 +190,18 @@ function PlannerView({ species, inventory, run, onOpenSaved, initialTarget }: Re
     worker.current.terminate(); worker.current = null
     const elapsed = performance.now() - workerStartedAt.current; setElapsedMs(elapsed); setRunning(false); setWorkerProgress(null); setProgress(`Cancelled after ${formatElapsed(elapsed)}`)
   }
-  const save = async () => { if (!plan) return; const name = prompt('Plan name', `${meta?.name} ${target.nature}`); if (!name) return; let savedId = 0; await run(async () => { const saved = await window.desktopApi.plans.save(name, plan); savedId = saved.id }, 'Plan saved and inventory reserved'); if (savedId) await onOpenSaved(savedId) }
+  const save = async () => {
+    if (!plan || saving || !planName.trim()) return
+    setSaving(true); setSaveError('')
+    try {
+      const saved = await window.desktopApi.plans.save(planName.trim(), plan)
+      await run(async () => undefined, 'Plan saved; Pokémon reserved')
+      setSaveOpen(false); setPlan(null); await onOpenSaved(saved.id)
+    } catch (error) { setSaveError(error instanceof Error ? error.message : String(error)) }
+    finally { setSaving(false) }
+  }
   return <section><div className="planner-layout"><div className="panel target-panel"><div className="panel-title"><h2>New target</h2><span className="badge verified">GUARANTEED ONLY</span></div>
-    <label>Pokémon<select value={target.speciesId} onChange={(e) => setTarget({ ...target, speciesId: Number(e.target.value) })}>{species.filter((entry) => entry.breedable).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
+    <label>Pokémon<select value={target.speciesId || ''} onChange={(e) => setTarget({ ...target, speciesId: Number(e.target.value) })}><option value="">Select Pokémon…</option>{species.filter((entry) => entry.breedable).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
     <div className="metadata"><span>Egg Groups <b>{meta?.eggGroups.join(' + ')}</b></span><span>Offspring <b>{species.find((s) => s.id === meta?.hatchSpeciesId)?.name}</b></span></div>
     <div className="ivs-editor target-ivs">{STATS.map((stat) => {
       const parsed = parseTargetIvText(ivDrafts[stat]); const ignored = parsed.valid && parsed.value === null; const exact = targetIvIsExact(target, stat)
@@ -310,16 +218,17 @@ function PlannerView({ species, inventory, run, onOpenSaved, initialTarget }: Re
         const nextExact = event.target.checked; setTarget((current) => ({ ...current, ivExact: { ...current.ivExact, [stat]: nextExact } })); setIvDrafts((current) => ({ ...current, [stat]: `${value}${nextExact ? '' : '+'}` }))
       }} />Exact</label><small>{!parsed.valid ? 'INVALID' : ignored ? 'IGNORE' : exact ? 'EXACT' : `MIN ${target.ivs[stat]}+`}</small></div>
     })}</div>
-    <label>Nature<select value={target.nature} onChange={(e) => setTarget({ ...target, nature: e.target.value as Nature })}>{NATURES.map((n) => <option key={n}>{n}</option>)}</select></label>
+    <label>Nature<select value={target.nature ?? ''} onChange={(e) => setTarget({ ...target, nature: e.target.value ? e.target.value as Nature : null })}><option value="">Ignore</option>{NATURES.map((n) => <option key={n}>{n}</option>)}</select></label>
     <div className="form-grid"><label>Hidden Ability<select value={target.ha} onChange={(e) => setTarget({ ...target, ha: e.target.value as BreedingTarget['ha'] })}><option>Any</option><option>Yes</option><option>No</option></select></label><label>Type<select value={target.alpha} onChange={(e) => setTarget({ ...target, alpha: e.target.value as AlphaRequirement })}><option>Any</option><option>Normal</option><option>Alpha</option></select></label></div>
     <label>Optimization<select value={target.optimizer} onChange={(e) => setTarget({ ...target, optimizer: e.target.value as BreedingTarget['optimizer'] })}><option value="missing">Minimum missing breeders</option><option value="breeds">Minimum breeds</option><option value="balanced">Balanced</option></select></label>
-    <div className="modal-actions"><button disabled={!running} onClick={cancel}>Cancel</button><button className="primary" disabled={running} onClick={calculate}>{running ? 'Calculating…' : 'Calculate'}</button></div>{running ? <div className="planner-progress-card">
+    <div className="modal-actions"><button disabled={!running} onClick={cancel}>Cancel</button><button className="primary" disabled={running || !target.speciesId} onClick={calculate}>{running ? 'Calculating…' : 'Calculate'}</button></div>{running ? <div className="planner-progress-card">
       <div className="planner-progress-meta"><span>{workerProgress?.phase ?? 'Starting worker'}</span><b>{(workerProgress?.explored ?? 0).toLocaleString()} / {PLANNER_MAX_STATES.toLocaleString()} states</b><time>{formatElapsed(elapsedMs)}</time></div>
       <div className="planner-progress-track" role="progressbar" aria-label="Planner search progress" aria-valuemin={0} aria-valuemax={PLANNER_MAX_STATES} aria-valuenow={workerProgress?.explored ?? 0}><span className={`planner-progress-fill ${workerProgress?.explored ? '' : 'indeterminate'}`} style={workerProgress?.explored ? { width: `${Math.min(100, workerProgress.explored / PLANNER_MAX_STATES * 100)}%` } : undefined} /></div>
     </div> : <small className="progress">{progress}</small>}</div>
-    <div className="panel planner-result">{plan ? <><div className="panel-title"><div><h2>{plan.valid ? 'Validated breeding tree' : 'Invalid plan'}</h2><small>{plan.steps.length} breeds · {plan.inventoryIds.length} owned · {plan.missingBreeders.length} missing</small></div><button className="primary" onClick={() => void save()}>Save plan</button></div>
+    <div className="panel planner-result">{plan ? <><div className="panel-title"><div><h2>{plan.valid ? 'Validated breeding tree' : 'Invalid plan'}</h2><small>{plan.steps.length} breeds · {plan.inventoryIds.length} owned · {plan.missingBreeders.length} missing</small></div><button className="primary" onClick={() => { setPlanName(`${species.find((entry) => entry.id === plan.target.speciesId)?.name ?? 'Pokémon'} ${plan.target.nature ?? ''}`.trim()); setSaveError(''); setSaveOpen(true) }}>Save plan</button></div>
       <PlanTree plan={plan} species={species} onSelect={setSelectedNode} />
       <div className="diagnostics"><b>Planner diagnostics</b><span>Explored {plan.diagnostics.statesExplored}</span><span>Pruned {plan.diagnostics.statesPruned}</span><span>Cache hits {plan.diagnostics.cacheHits}</span><span>{plan.diagnostics.searchTimeMs} ms</span>{plan.diagnostics.failureReason && <span>{plan.diagnostics.failureReason}</span>}</div></> : <div className="empty-state"><span className="empty-icon">⌘</span><h2>{running ? 'Calculating breeding tree…' : 'Ready'}</h2>{running && <p>{(workerProgress?.explored ?? 0).toLocaleString()} / {PLANNER_MAX_STATES.toLocaleString()} · {formatElapsed(elapsedMs)}</p>}</div>}</div></div>
+  {saveOpen && <div className="modal-backdrop"><form className="modal" onSubmit={(event) => { event.preventDefault(); void save() }}><h2>Save breeding plan</h2><label>Name<input autoFocus maxLength={120} value={planName} onChange={(event) => setPlanName(event.target.value)} /></label><p>Owned Pokémon in this plan will be reserved until the plan is deleted or the breed is completed.</p>{saveError && <p role="alert">{saveError}</p>}<div className="modal-actions"><button type="button" disabled={saving} onClick={() => setSaveOpen(false)}>Cancel</button><button className="primary" disabled={saving || !planName.trim()}>{saving ? 'Saving…' : 'Save'}</button></div></form></div>}
   {selectedNode && <NodeDetail node={selectedNode} species={species} plan={plan} onClose={() => setSelectedNode(null)} />}</section>
 }
 
@@ -340,6 +249,7 @@ function NodeDetail({ node, species, plan, onClose }: { node: PlanNode; species:
 
 function PlansView({ plans, species, opened, setOpened, refresh, setNotice, onRecalculate }: { plans: SavedPlanSummary[]; species: Species[]; opened: SavedPlan | null; setOpened(plan: SavedPlan | null): void; refresh(): Promise<void>; setNotice(message: string): void; onRecalculate(target: BreedingTarget): void }) {
   const [selectedNode, setSelectedNode] = useState<PlanNode | null>(null)
+  const { ask, modal } = useTextPrompt()
   const load = async (id: number) => setOpened(await window.desktopApi.plans.get(id))
   const nextStep = opened?.tree.steps.find((step) => step.status === 'Pending' && [step.parentAId, step.parentBId].every((id) => {
     const node = opened.tree.nodes.find((entry) => entry.id === id); return node && node.kind !== 'missing' && (!['intermediate', 'result'].includes(node.kind) || node.producedInventoryId)
@@ -349,14 +259,14 @@ function PlansView({ plans, species, opened, setOpened, refresh, setNotice, onRe
     const result = opened.tree.nodes.find((node) => node.id === nextStep.resultNodeId); if (!result) return
     const observedIvs: Partial<Record<Stat, number>> = {}
     for (const stat of STATS) if (result.guaranteedIvs[stat] === null) {
-      const value = prompt(`Observed ${stat.toUpperCase()} (allowed: ${result.possibleIvs[stat].join(', ')})`); if (value === null) return; observedIvs[stat] = Number(value)
+      const value = await ask(`Observed ${stat.toUpperCase()} (allowed: ${result.possibleIvs[stat].join(', ')})`); if (value === null) return; observedIvs[stat] = Number(value)
     }
-    const observedNature = result.natureGuaranteed ? undefined : prompt('Observed nature') as Nature | null
+    const observedNature = result.natureGuaranteed ? undefined : await ask('Observed nature') as Nature | null
     if (!result.natureGuaranteed && !observedNature) return
     try { const next = await window.desktopApi.plans.completeStep({ planId: opened.id, stepId: nextStep.id, observedIvs, observedNature: observedNature ?? undefined }); setOpened(next); await refresh(); setNotice(`${nextStep.id} completed safely`) } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
   }
   const replace = async (missingId: string) => {
-    if (!opened) return; const raw = prompt('Inventory ID of the purchased/caught breeder'); if (!raw) return
+    if (!opened) return; const raw = await ask('Inventory ID of the purchased/caught breeder'); if (!raw) return
     try { const next = await window.desktopApi.plans.replaceMissing(opened.id, missingId, Number(raw)); setOpened(next); await refresh(); setNotice(`${missingId} replaced and tree revalidated`) } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
   }
   const recalculate = () => {
@@ -368,7 +278,7 @@ function PlansView({ plans, species, opened, setOpened, refresh, setNotice, onRe
     <div className="panel saved-detail">{opened ? <><div className="panel-title"><div><h2>{opened.name}</h2><small>{opened.status} · {opened.tree.steps.filter((s) => s.status === 'Completed').length}/{opened.tree.steps.length} completed</small></div><div className="actions-row"><button onClick={recalculate}>Recalculate</button><button disabled={!nextStep} className="primary" onClick={() => void complete()}>Breed Completed</button><button className="danger" onClick={async () => { if (confirm('Delete plan and release reserved breeders?')) { await window.desktopApi.plans.delete(opened.id); setOpened(null); await refresh() } }}>Delete</button></div></div>
       {opened.tree.missingBreeders.length > 0 && <div className="missing-strip">{opened.tree.missingBreeders.map((missing) => <button key={missing.id} onClick={() => void replace(missing.id)}><b>{missing.id.toUpperCase()}</b><span>{missing.eggGroups.join('+')} · {missing.gender}</span><small>Replace Missing Breeder</small></button>)}</div>}
       <PlanTree plan={opened.tree} species={species} onSelect={setSelectedNode} /></> : <div className="empty-state"><h2>Select a saved plan</h2></div>}</div></div>
-    {selectedNode && <NodeDetail node={selectedNode} species={species} plan={opened?.tree ?? null} onClose={() => setSelectedNode(null)} />}</section>
+    {modal}{selectedNode && <NodeDetail node={selectedNode} species={species} plan={opened?.tree ?? null} onClose={() => setSelectedNode(null)} />}</section>
 }
 
 function BackupView({ run }: { run(operation: () => Promise<unknown>, success: string): Promise<void> }) {
@@ -381,7 +291,7 @@ function BackupView({ run }: { run(operation: () => Promise<unknown>, success: s
 }
 
 function SettingsView({ run }: { run(operation: () => Promise<unknown>, success: string): Promise<void> }) {
-  const [info, setInfo] = useState<{ version: string; development: boolean; databasePath: string } | null>(null)
+  const [info, setInfo] = useState<{ version: string; development: boolean; databasePath: string; settingsPath: string } | null>(null)
   useEffect(() => { void window.desktopApi.app.info().then(setInfo) }, [])
-  return <section><div className="panel settings"><h2>Local data</h2><dl><dt>Version</dt><dd>{info?.version}</dd><dt>Database</dt><dd>{info?.databasePath}</dd><dt>Mode</dt><dd>{info?.development ? 'Development (isolated database)' : 'Production'}</dd><dt>Ruleset</dt><dd>pokemmo-v1-2026-08-23</dd><dt>Species dataset</dt><dd>649 species, generated and bundled offline</dd></dl>{info?.development && <button onClick={() => void run(() => window.desktopApi.dev.loadDataset(), 'Loaded 50 development breeders')}>Load Development Dataset</button>}</div></section>
+  return <section><div className="panel settings"><h2>Local data</h2><dl><dt>Version</dt><dd>{info?.version}</dd><dt>Database</dt><dd>{info?.databasePath}</dd><dt>Settings INI</dt><dd>{info?.settingsPath}</dd><dt>Mode</dt><dd>{info?.development ? 'Development (isolated database)' : 'Production'}</dd><dt>Ruleset</dt><dd>pokemmo-v1-2026-08-23</dd><dt>Species dataset</dt><dd>649 species, generated and bundled offline</dd></dl>{info?.development && <button onClick={() => void run(() => window.desktopApi.dev.loadDataset(), 'Loaded 50 development breeders')}>Load Development Dataset</button>}</div></section>
 }

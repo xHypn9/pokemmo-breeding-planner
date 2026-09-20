@@ -224,7 +224,7 @@ export class BreedingPlanner {
         const afterUtility = bitCount(afterMask) + Number(node.natureGuaranteed && node.nature === target.nature)
         const lineChanged = node.speciesId !== a.node.speciesId && node.speciesId !== b.node.speciesId
         const haGained = node.ha && !a.node.ha && !b.node.ha
-        if (afterUtility === 0 || (afterUtility <= Math.max(bitCount(maskA), bitCount(maskB)) && !lineChanged && !haGained)) continue
+        if ((afterUtility === 0 && requiredStatMask(target) !== 0) || (afterUtility <= Math.max(bitCount(maskA), bitCount(maskB)) && !lineChanged && !haGained)) continue
         if (afterUtility + 2 < beforeUtility) continue
         results.push({
           node, left: a, right: b, itemA, itemB, reasons: simulated.reasons,
@@ -236,10 +236,14 @@ export class BreedingPlanner {
     return results
   }
 
+  private natureItem(target: BreedingTarget): HeldItem {
+    return target.nature === null ? { type: 'None' } : { type: 'Everstone', nature: target.nature }
+  }
+
   private itemOptions(node: PlanNode, uniqueMask: number, target: BreedingTarget): HeldItem[] {
     const result: HeldItem[] = [{ type: 'None' }]
     STATS.forEach((stat, index) => { if (uniqueMask & (1 << index)) result.push({ type: 'Brace', stat }) })
-    if (node.natureGuaranteed && node.nature === target.nature) result.push({ type: 'Everstone', nature: target.nature })
+    if (target.nature !== null && node.natureGuaranteed && node.nature === target.nature) result.push(this.natureItem(target))
     return result
   }
 
@@ -295,7 +299,7 @@ export class BreedingPlanner {
   private isGoal(candidate: Candidate, target: BreedingTarget): boolean {
     const targetSpecies = this.rules.species(target.speciesId)
     return candidate.breeds > 0 && candidate.node.speciesId === targetSpecies.hatchSpeciesId && statMask(candidate.node, target) === requiredStatMask(target)
-      && candidate.node.natureGuaranteed && candidate.node.nature === target.nature
+      && (target.nature === null || (candidate.node.natureGuaranteed && candidate.node.nature === target.nature))
       && (target.alpha === 'Any' || candidate.node.alpha === (target.alpha === 'Alpha'))
       && (target.ha === 'Any' || candidate.node.ha === (target.ha === 'Yes'))
   }
@@ -303,7 +307,7 @@ export class BreedingPlanner {
   private isExistingGoal(candidate: Candidate, target: BreedingTarget): boolean {
     return candidate.breeds === 0 && candidate.node.inventoryId !== undefined && candidate.node.speciesId === target.speciesId
       && statMask(candidate.node, target) === requiredStatMask(target)
-      && candidate.node.natureGuaranteed && candidate.node.nature === target.nature
+      && (target.nature === null || (candidate.node.natureGuaranteed && candidate.node.nature === target.nature))
       && (target.alpha === 'Any' || candidate.node.alpha === (target.alpha === 'Alpha'))
       && (target.ha === 'Any' || candidate.node.ha === (target.ha === 'Yes'))
   }
@@ -326,7 +330,7 @@ export class BreedingPlanner {
 
     for (const anchor of actual) {
       if (anchor.node.inventoryId === undefined || anchor.node.speciesId !== target.speciesId) continue
-      if (!anchor.node.natureGuaranteed || anchor.node.nature !== target.nature) continue
+      if (target.nature !== null && (!anchor.node.natureGuaranteed || anchor.node.nature !== target.nature)) continue
       if (target.alpha === 'Alpha' && !anchor.node.alpha) continue
       if (target.ha === 'No' && anchor.node.ha) continue
       const missingStats = STATS.filter((_, index) => (requiredMask & (1 << index)) !== 0 && (statMask(anchor.node, target) & (1 << index)) === 0)
@@ -343,7 +347,7 @@ export class BreedingPlanner {
 
       const partnerItem: HeldItem = missingStats[0] ? { type: 'Brace', stat: missingStats[0] } : { type: 'None' }
       try {
-        const completion = this.combineSpecified(anchor, complement, { type: 'Everstone', nature: target.nature }, partnerItem, selectable[0] as Gender, target)
+        const completion = this.combineSpecified(anchor, complement, this.natureItem(target), partnerItem, selectable[0] as Gender, target)
         if (this.isGoal(completion, target)) completions.push(completion)
       } catch {
         // This anchor cannot produce the target line with a deterministic complementary parent.
@@ -367,6 +371,7 @@ export class BreedingPlanner {
 
   private missingCandidate(mask: number, nature: boolean, gender: Gender, ha: boolean, ditto: boolean, target: BreedingTarget, sameLine = true): Candidate {
     const targetSpecies = this.rules.species(this.rules.species(target.speciesId).hatchSpeciesId)
+    nature = nature && target.nature !== null
     const requiredIvs: Partial<Record<Stat, number>> = {}
     const minimumIvs: Partial<Record<Stat, number>> = {}
     const possibleIvs = {} as PlanNode['possibleIvs']
@@ -412,13 +417,31 @@ export class BreedingPlanner {
         const gender = selectable[0] as Gender
         const speciesParent = this.missingCandidate(0, true, gender, needHa, false, target)
         const ditto = this.missingCandidate(0, false, 'Genderless', false, true, target)
-        return this.combineSpecified(speciesParent, ditto, { type: 'Everstone', nature: target.nature }, { type: 'None' }, gender, target)
+        return this.combineSpecified(speciesParent, ditto, this.natureItem(target), { type: 'None' }, gender, target)
       }
       const gender = selectable[0] as Gender
       const parentGenders: [Gender, Gender] = gender === 'Genderless' ? ['Genderless', 'Genderless'] : ['Female', 'Male']
       const natureParent = this.missingCandidate(0, true, parentGenders[0], needHa, false, target)
       const otherParent = this.missingCandidate(0, false, parentGenders[1], false, false, target, parentGenders[1] !== 'Male')
-      return this.combineSpecified(natureParent, otherParent, { type: 'Everstone', nature: target.nature }, { type: 'None' }, gender, target)
+      return this.combineSpecified(natureParent, otherParent, this.natureItem(target), { type: 'None' }, gender, target)
+    }
+    if (target.nature === null) {
+      if (selectable.length === 1 && selectable[0] !== 'Genderless') {
+        const gender = selectable[0] as Gender
+        const parent = this.buildFixedRegular(fullMask, gender, needHa, target)
+        if (parent.breeds > 0) return parent
+        const ditto = this.missingCandidate(0, false, 'Genderless', false, true, target)
+        const stat = STATS.find((_, index) => fullMask & (1 << index))!
+        return this.combineSpecified(parent, ditto, { type: 'Brace', stat }, { type: 'None' }, gender, target)
+      }
+      if (bitCount(fullMask) === 1) {
+        const gender = selectable[0] as Gender
+        const left = this.missingCandidate(fullMask, false, gender === 'Genderless' ? gender : 'Female', needHa, false, target)
+        const right = this.missingCandidate(0, false, gender === 'Genderless' ? gender : 'Male', false, false, target, gender === 'Genderless')
+        const stat = STATS.find((_, index) => fullMask & (1 << index))!
+        return this.combineSpecified(left, right, { type: 'Brace', stat }, { type: 'None' }, gender, target)
+      }
+      return this.buildRegular(fullMask, selectable[0] as Gender, needHa, target)
     }
     if (selectable.length === 1 && selectable[0] !== 'Genderless') return this.buildFixedNature(fullMask, selectable[0] as Gender, needHa, target)
     return this.buildNature(fullMask, selectable[0] as Gender, needHa, target)
@@ -442,7 +465,7 @@ export class BreedingPlanner {
     const parentGenders: [Gender, Gender] = gender === 'Genderless' ? ['Genderless', 'Genderless'] : ['Female', 'Male']
     const natureParent = this.buildNature(mask & ~(1 << added), parentGenders[0], needHa, target)
     const fullParent = this.buildRegular(mask, parentGenders[1], false, target)
-    return this.combineSpecified(natureParent, fullParent, { type: 'Everstone', nature: target.nature }, { type: 'Brace', stat: STATS[added] as Stat }, gender, target)
+    return this.combineSpecified(natureParent, fullParent, this.natureItem(target), { type: 'Brace', stat: STATS[added] as Stat }, gender, target)
   }
 
   private buildFixedRegular(mask: number, gender: Gender, needHa: boolean, target: BreedingTarget): Candidate {
@@ -460,7 +483,7 @@ export class BreedingPlanner {
     const added = bits[bits.length - 1] as number
     const natureParent = this.buildFixedNature(mask & ~(1 << added), gender, needHa, target)
     const ditto = this.missingCandidate(mask, false, 'Genderless', false, true, target)
-    return this.combineSpecified(natureParent, ditto, { type: 'Everstone', nature: target.nature }, { type: 'Brace', stat: STATS[added] as Stat }, gender, target)
+    return this.combineSpecified(natureParent, ditto, this.natureItem(target), { type: 'Brace', stat: STATS[added] as Stat }, gender, target)
   }
 
   private combineSpecified(a: Candidate, b: Candidate, itemA: HeldItem, itemB: HeldItem, gender: Gender, target: BreedingTarget): Candidate {

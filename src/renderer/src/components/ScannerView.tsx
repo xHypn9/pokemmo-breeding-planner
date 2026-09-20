@@ -60,7 +60,10 @@ export function ScannerView({ active, species, boxes, refresh, setNotice }: Prop
   const [scanning, setScanning] = useState(false)
   const [live, setLive] = useState(false)
   const [stability, setStability] = useState(0)
-  const [hotkey, setHotkey] = useState('Ctrl+Shift+S')
+  const [hotkey, setHotkey] = useState('F2')
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false)
+  const [restoreHotkey, setRestoreHotkey] = useState(false)
+  const hotkeyAttempt = useRef('')
   const [hotkeyEnabled, setHotkeyEnabled] = useState(false)
   const [summary, setSummary] = useState<ScannerImportSummary | null>(null)
   const [importError, setImportError] = useState('')
@@ -87,9 +90,33 @@ export function ScannerView({ active, species, boxes, refresh, setNotice }: Prop
     void window.desktopApi.settings.get().then((settings) => {
       if (isCalibration(settings['scanner.calibration'])) setCalibration(settings['scanner.calibration'])
       if (typeof settings['scanner.hotkey'] === 'string') setHotkey(settings['scanner.hotkey'])
-    })
+      if (typeof settings['scanner.boxId'] === 'string') setBoxId(settings['scanner.boxId'])
+      setShowCrops(settings['scanner.showCrops'] === true)
+      setDebugSave(settings['scanner.debugSave'] === true)
+      setRestoreHotkey(settings['scanner.hotkeyEnabled'] === true)
+      setPreferencesLoaded(true)
+    }).catch((error) => setNotice(`Settings could not be loaded: ${String(error)}`))
   }, [])
-  useEffect(() => { if (active) void refreshSources() }, [active])
+  useEffect(() => { void refreshSources() }, [active])
+  useEffect(() => {
+    if (!restoreHotkey || sourceId) return
+    const timer = window.setInterval(() => void refreshSources(), 5000)
+    return () => window.clearInterval(timer)
+  }, [restoreHotkey, sourceId])
+  useEffect(() => {
+    if (!preferencesLoaded) return
+    const timer = window.setTimeout(() => {
+      void Promise.all(Object.entries({ 'scanner.boxId': boxId, 'scanner.showCrops': showCrops, 'scanner.debugSave': debugSave, 'scanner.calibration': calibration, 'scanner.hotkey': hotkey }).map(([key, value]) => window.desktopApi.settings.set(key, value))).catch((error) => setNotice(String(error)))
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [preferencesLoaded, boxId, showCrops, debugSave, calibration, hotkey])
+  useEffect(() => {
+    if (!preferencesLoaded || !restoreHotkey || hotkeyEnabled || !sourceId || !selectedBox) return
+    const attempt = sourceId + '|' + hotkey + '|' + boxId
+    if (hotkeyAttempt.current === attempt) return
+    hotkeyAttempt.current = attempt
+    void toggleHotkey()
+  }, [preferencesLoaded, restoreHotkey, hotkeyEnabled, sourceId, selectedBox, hotkey])
 
   useEffect(() => {
     const removeCapture = window.desktopApi.scanner.onCaptured((result) => {
@@ -176,6 +203,8 @@ export function ScannerView({ active, species, boxes, refresh, setNotice }: Prop
       setHotkeyEnabled(result.registered)
       activeHotkey.current = result.registered ? { sourceId, calibration, accelerator: hotkey } : null
       if (result.registered) await window.desktopApi.settings.set('scanner.hotkey', hotkey)
+      await window.desktopApi.settings.set('scanner.hotkeyEnabled', result.registered)
+      setRestoreHotkey(result.registered)
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); void refreshSources() }
   }
 

@@ -55,7 +55,7 @@ export interface BreedingTarget {
   ivs: TargetIvs
   /** Missing means exact for backward compatibility with plans saved before v0.2.0. */
   ivExact?: Partial<Record<Stat, boolean>>
-  nature: Nature
+  nature: Nature | null
   ha: Requirement
   alpha: AlphaRequirement
   optimizer: OptimizerMode

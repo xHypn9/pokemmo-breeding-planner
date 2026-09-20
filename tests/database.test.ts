@@ -13,6 +13,26 @@ const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
 describe('SQLite repositories and atomic breed completion', () => {
+  it('persists saved plans and reservations across restart, then releases parents when deleted', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pbp-reserved-test-')); directories.push(directory)
+    const path = join(directory, 'test.sqlite')
+    let database = new AppDatabase(path); let repository = new AppRepository(database)
+    const base: InventoryInput = { speciesId: 443, gender: 'Female', ivs: ivs({ hp: 31 }), nature: 'Hardy', alpha: false, ha: false, boxId: null, notes: '' }
+    const a = repository.createPokemon(base); const b = repository.createPokemon({ ...base, gender: 'Male' })
+    const target: BreedingTarget = { speciesId: 445, ivs: { hp: 31, atk: null, def: null, spAtk: null, spDef: null, speed: null }, nature: null, alpha: 'Any', ha: 'Any', optimizer: 'balanced' }
+    const tree = new BreedingPlanner().calculate(repository.inventory(), target)
+    const saved = repository.savePlan('Persistent plan', tree)
+    database.close()
+    database = new AppDatabase(path); repository = new AppRepository(database)
+    expect(repository.plan(saved.id).tree).toEqual(saved.tree)
+    expect(repository.inventoryById(a.id).status).toBe('Reserved')
+    expect(repository.inventoryById(b.id).status).toBe('Reserved')
+    expect(new BreedingPlanner().calculate(repository.inventory(), target).inventoryIds).toEqual([])
+    expect(() => repository.savePlan('Duplicate', tree)).toThrow('no longer available')
+    repository.deletePlan(saved.id)
+    expect(repository.inventory().every((entry) => entry.status === 'Available')).toBe(true)
+    database.close()
+  })
   it('migrates existing schema-v1 inventory as breeding-enabled', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pbp-v1-migration-test-')); directories.push(directory)
     const path = join(directory, 'test.sqlite')

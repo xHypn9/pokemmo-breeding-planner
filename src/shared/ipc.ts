@@ -44,7 +44,7 @@ export interface DesktopApi {
   dialog: { save(defaultPath: string, filters: FileFilter[]): Promise<string | null>; open(filters: FileFilter[]): Promise<string | null> }
   settings: { get(): Promise<Record<string, unknown>>; set(key: string, value: unknown): Promise<void> }
   dev: { loadDataset(): Promise<number> }
-  app: { info(): Promise<{ version: string; development: boolean; databasePath: string }> }
+  app: { info(): Promise<{ version: string; development: boolean; databasePath: string; settingsPath: string }> }
   sprite: { get(speciesId: number): Promise<string | null> }
   scanner: {
     sources(): Promise<ScannerSource[]>

@@ -66,7 +66,7 @@ export class PlanValidator {
         const operator = targetIvIsExact(plan.target, stat) ? '=' : '>='
         errors.push(`Final ${stat}${operator}${plan.target.ivs[stat]} is not guaranteed`)
       }
-      if (!root.natureGuaranteed || root.nature !== plan.target.nature) errors.push(`Final nature ${plan.target.nature} is not guaranteed`)
+      if (plan.target.nature !== null && (!root.natureGuaranteed || root.nature !== plan.target.nature)) errors.push(`Final nature ${plan.target.nature} is not guaranteed`)
       if (plan.target.alpha === 'Alpha' && !root.alpha) errors.push('Final Alpha is not guaranteed')
       if (plan.target.alpha === 'Normal' && root.alpha) errors.push('Final result is Alpha but Normal was requested')
       if (plan.target.ha === 'Yes' && !root.ha) errors.push('Final HA potential is not guaranteed')
