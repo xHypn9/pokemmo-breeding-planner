@@ -11,7 +11,7 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 
 - Persistent scanner preferences in `settings.ini` under the application user-data folder: shortcut, enabled state, destination box, debug options and calibration. A saved enabled shortcut is restored when PokeMMO and the saved destination box are available.
 - Planner starts empty: choose the species; IVs and nature are ignored by default, HA and type default to Any.
-- In-app dialogs save breeding plans and collect observed IVs/nature. Saved plans reserve their inventory Pokémon across restarts; deleting a plan releases unused parents.
+- In-app dialogs save breeding plans and collect observed IVs; observed Nature is chosen from a dropdown. Saved plans reserve their inventory Pokémon across restarts; deleting a plan releases unused parents.
 - Optional manual Google Drive backup through system-browser OAuth 2.0, PKCE and loopback redirect. The cloud icon reports local dirty state; uploads retain the newest 10 versions and restore replaces the complete SQLite database only after existing integrity checks and a local safety snapshot.
 
 
@@ -38,7 +38,7 @@ The planner treats inventory Pokémon as consumable resources. A Pokémon ID can
 - Automatic discovery normalizes every Cyrillic or Greek lookalike used by the changing PokeMMO window title (for example `РokеMМO`) and reacquires the window if Electron changes its source ID between discovery and capture. Administrator privileges are not required.
 - Independent `PlanValidator` and automatic revalidation after replacing a missing breeder.
 - Interactive React Flow tree with zoom, pan, fit, node details, items, selected gender and guarantee reasons.
-- Persistent plans, warned recalculation, and transactional `Breed Completed`: consume parents, create child, update steps and history.
+- Persistent plans, warned recalculation, and transactional `Breed Completed`: remove used parents from inventory, create the child, update steps and history.
 - Automatic SQLite safety snapshot before each completed breed and before restore/import, with one-click recovery of the latest snapshot.
 - Versioned `.pbpbackup` archives and readable JSON export/import.
 - Development-only 50-breeder seed and planner diagnostics.
@@ -139,6 +139,8 @@ The installed application directory never contains user data, and uninstall does
 
 `Create Backup` writes a ZIP-based `.pbpbackup` containing a consistent SQLite snapshot and `manifest.json`. Restore validates format, schema and SQLite integrity first, then creates a safety snapshot of current data before an atomic staged replacement. The latest 20 automatic safety snapshots are retained under the app user-data directory. `Restore Latest Safety Snapshot` provides explicit recovery from an accidental `Breed Completed`; a restored snapshot is marked as used so the same undo cannot be applied twice.
 
+On the first 1.1.0 launch, legacy `Consumed` inventory rows are removed from the active database. If any are present, a `before-consumed-cleanup-*.sqlite` safety copy is created beside the database first. Completed breeding steps remain visible in saved plans.
+
 JSON import validates top-level shape, IDs, foreign references, species/gender, all IVs/natures, and every imported breeding plan before starting the replacement transaction.
 
 ### Google Drive developer setup
@@ -173,7 +175,7 @@ If that exact owned Pokémon already has the requested nature and is short by at
 
 If the bounded search cannot find a mixed plan within configured limits, V1 produces a validated deterministic template made from simple one-IV or natured missing constraints. It does not hide this fallback: diagnostics show the limit and reason. Generic male constraints can be satisfied by any compatible Egg Group; female constraints retain the required offspring line without naming a GTL species.
 
-For an intermediate whose irrelevant IV or nature is genuinely not forced, the app asks for only the observed non-guaranteed fields when `Breed Completed` is pressed. All target properties remain guaranteed; automatically inventing an intermediate value would be incorrect.
+For an intermediate whose irrelevant IV or nature is genuinely not forced, the app asks for only the observed non-guaranteed fields when `Breed Completed` is pressed. Nature is selected from the complete list rather than typed. All target properties remain guaranteed; automatically inventing an intermediate value would be incorrect.
 
 An ignored target IV is not optimized, braced or added to missing-breeder requirements. Because the resulting real Pokémon still has a concrete IV, the app requests its observed value when that breed is recorded and stores it in inventory.
 

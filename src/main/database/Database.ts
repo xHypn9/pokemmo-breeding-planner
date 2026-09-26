@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { SPECIES } from '../../data/species'
 import migration001 from './migrations/001_initial.sql?raw'
 import migration002 from './migrations/002_breeding_enabled.sql?raw'
+import migration003 from './migrations/003_remove_consumed.sql?raw'
 
 const now = () => new Date().toISOString()
 const escapeSqlString = (value: string) => value.replaceAll("'", "''")
@@ -38,6 +40,15 @@ export class AppDatabase {
       this.connection.exec(migration002)
       this.connection.prepare('INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)').run(2, 'breeding-enabled', now())
     })
+    const row003 = this.connection.prepare('SELECT version FROM schema_migrations WHERE version = ?').get(3) as { version: number } | undefined
+    if (!row003) {
+      const consumed = this.connection.prepare("SELECT COUNT(*) AS count FROM pokemon_inventory WHERE status='Consumed'").get() as { count: number }
+      if (consumed.count > 0) this.snapshot(join(dirname(this.path), `before-consumed-cleanup-${randomUUID()}.sqlite`))
+      this.transaction(() => {
+        this.connection.exec(migration003)
+        this.connection.prepare('INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)').run(3, 'remove-consumed-inventory', now())
+      })
+    }
   }
 
   private seedSpecies(): void {

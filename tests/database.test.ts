@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -6,7 +6,8 @@ import { BreedingPlanner } from '../src/domain/breeding'
 import { AppDatabase } from '../src/main/database/Database'
 import { AppRepository } from '../src/main/database/Repository'
 import { BackupService } from '../src/main/services/BackupService'
-import type { BreedingTarget, InventoryInput } from '../src/shared/types'
+import { STATS } from '../src/shared/constants'
+import type { BreedingTarget, InventoryInput, SavedPlan, Stat } from '../src/shared/types'
 import { ivs } from './helpers'
 
 const directories: string[] = []
@@ -54,13 +55,13 @@ describe('SQLite repositories and atomic breed completion', () => {
       speciesId: 443, gender: 'Male', ivs: ivs({ hp: 31 }), nature: 'Hardy', alpha: false, ha: false,
       boxId: null, notes: 'Legacy record'
     })
-    original.db.exec('ALTER TABLE pokemon_inventory DROP COLUMN breeding_enabled; DELETE FROM schema_migrations WHERE version=2;')
+    original.db.exec('ALTER TABLE pokemon_inventory DROP COLUMN breeding_enabled; DELETE FROM schema_migrations WHERE version IN (2,3);')
     original.close()
 
     const migrated = new AppDatabase(path); const migratedRepository = new AppRepository(migrated)
     expect(migratedRepository.inventoryById(pokemon.id).breedingEnabled).toBe(true)
     const schema = migrated.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number }
-    expect(schema.version).toBe(2)
+    expect(schema.version).toBe(3)
     migrated.close()
   })
 
@@ -91,7 +92,7 @@ describe('SQLite repositories and atomic breed completion', () => {
     expect(enabled.breedingEnabled).toBe(true)
     expect(repository.dashboard().available).toBe(1)
     const schema = database.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number }
-    expect(schema.version).toBe(2)
+    expect(schema.version).toBe(3)
     database.close()
   })
 
@@ -138,20 +139,22 @@ describe('SQLite repositories and atomic breed completion', () => {
     database.close()
   })
 
-  it('migrates, reserves parents, consumes them and creates the guaranteed child', () => {
+  it('migrates, reserves parents, removes them and creates the guaranteed child', () => {
     const directory = mkdtempSync(join(tmpdir(), 'pbp-db-test-')); directories.push(directory)
     const database = new AppDatabase(join(directory, 'test.sqlite')); const repository = new AppRepository(database)
     const box = repository.createBox('Alpha 1')
     const exact = ivs({ hp: 31, atk: 31, def: 31, spAtk: 15, spDef: 31, speed: 31 })
     const base = (gender: 'Female' | 'Male', nature: 'Jolly' | 'Adamant', ha: boolean): InventoryInput => ({ speciesId: 443, gender, ivs: exact, nature, alpha: true, ha, boxId: box.id, notes: '' })
-    repository.createPokemon(base('Female', 'Jolly', true)); repository.createPokemon(base('Male', 'Adamant', false))
+    const parentA = repository.createPokemon(base('Female', 'Jolly', true)); const parentB = repository.createPokemon(base('Male', 'Adamant', false))
     const target: BreedingTarget = { speciesId: 445, ivs: exact, nature: 'Jolly', alpha: 'Alpha', ha: 'Yes', optimizer: 'balanced' }
     const tree = new BreedingPlanner().calculate(repository.inventory({ status: 'Available' }), target, { maxStates: 1_000 })
     const saved = repository.savePlan('Garchomp test', tree)
     expect(repository.inventory().filter((pokemon) => pokemon.status === 'Reserved')).toHaveLength(2)
     const complete = repository.completeStep({ planId: saved.id, stepId: tree.steps[0]!.id })
     expect(complete.status).toBe('Completed')
-    expect(repository.inventory().filter((pokemon) => pokemon.status === 'Consumed')).toHaveLength(2)
+    expect(repository.inventory()).toHaveLength(1)
+    expect(() => repository.inventoryById(parentA.id)).toThrow('not found')
+    expect(() => repository.inventoryById(parentB.id)).toThrow('not found')
     const child = repository.inventory().find((pokemon) => pokemon.status === 'Available')
     expect(child?.speciesId).toBe(443)
     expect(child?.ivs).toEqual(exact)
@@ -159,6 +162,77 @@ describe('SQLite repositories and atomic breed completion', () => {
     expect(child?.alpha).toBe(true)
     expect(child?.ha).toBe(true)
     expect(repository.history().length).toBeGreaterThanOrEqual(6)
+    const legacyConsumed = repository.createPokemon(base('Male', 'Adamant', false))
+    database.db.prepare("UPDATE pokemon_inventory SET status='Consumed' WHERE id=?").run(legacyConsumed.id)
+    const legacyExport = { ...repository.exportData(), schemaVersion: 2 }
+    const importedDatabase = new AppDatabase(join(directory, 'imported.sqlite'))
+    const imported = new AppRepository(importedDatabase)
+    imported.importData(legacyExport)
+    expect(imported.inventory().map((pokemon) => pokemon.id)).toEqual([child!.id])
+    expect(imported.plan(saved.id).tree.steps[0]?.status).toBe('Completed')
+    importedDatabase.close()
+    database.close()
+  })
+
+  it('backs up and removes legacy Consumed rows on upgrade without touching live Pokémon', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pbp-consumed-migration-test-')); directories.push(directory)
+    const path = join(directory, 'test.sqlite')
+    const original = new AppDatabase(path); const repository = new AppRepository(original)
+    const base: InventoryInput = { speciesId: 443, gender: 'Male', ivs: ivs({ hp: 31 }), nature: 'Hardy', alpha: false, ha: false, boxId: null, notes: '' }
+    const consumed = repository.createPokemon(base)
+    original.db.prepare("UPDATE pokemon_inventory SET status='Consumed' WHERE id=?").run(consumed.id)
+    const available = repository.createPokemon(base)
+    original.db.prepare('DELETE FROM schema_migrations WHERE version=3').run()
+    original.close()
+
+    const upgraded = new AppDatabase(path); const upgradedRepository = new AppRepository(upgraded)
+    expect(() => upgradedRepository.inventoryById(consumed.id)).toThrow('not found')
+    expect(upgradedRepository.inventoryById(available.id).status).toBe('Available')
+    expect(() => upgradedRepository.createPokemon({ ...base, status: 'Consumed' })).toThrow('cannot be added')
+    expect(() => upgradedRepository.updatePokemon(available.id, { status: 'Consumed' })).toThrow('cannot be kept')
+    expect(readdirSync(directory).some((name) => name.startsWith('before-consumed-cleanup-') && name.endsWith('.sqlite'))).toBe(true)
+    expect((upgraded.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number }).version).toBe(3)
+    upgraded.close()
+  })
+
+  it('continues a multi-step saved plan after each pair of parents is deleted', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pbp-multistep-consumption-test-')); directories.push(directory)
+    const database = new AppDatabase(join(directory, 'test.sqlite')); const repository = new AppRepository(database)
+    const target: BreedingTarget = {
+      speciesId: 445, ivs: { hp: 31, atk: 31, def: 31, spAtk: null, spDef: null, speed: null },
+      nature: null, alpha: 'Any', ha: 'Any', optimizer: 'balanced'
+    }
+    const planner = new BreedingPlanner()
+    const template = planner.calculate([], target, { maxStates: 1, maxRounds: 1 })
+    for (const missing of template.missingBreeders) {
+      const values = ivs()
+      for (const [stat, value] of Object.entries(missing.requiredIvs)) values[stat as Stat] = value
+      for (const [stat, value] of Object.entries(missing.minimumIvs ?? {})) values[stat as Stat] = Math.max(values[stat as Stat], value)
+      repository.createPokemon({
+        speciesId: 443, gender: missing.gender === 'Genderless' ? 'Female' : missing.gender,
+        ivs: values, nature: missing.nature ?? 'Hardy', alpha: missing.alpha, ha: missing.ha === true,
+        boxId: null, notes: ''
+      })
+    }
+    const tree = planner.calculate(repository.inventory({ status: 'Available' }), target, { maxStates: 1, maxRounds: 1 })
+    expect(tree.steps.length).toBeGreaterThan(1)
+    expect(tree.missingBreeders).toHaveLength(0)
+    let saved: SavedPlan = repository.savePlan('Multi-step', tree)
+    while (saved.tree.steps.some((step) => step.status === 'Pending')) {
+      const nodes = new Map(saved.tree.nodes.map((node) => [node.id, node]))
+      const step = saved.tree.steps.find((entry) => entry.status === 'Pending' && [entry.parentAId, entry.parentBId].every((id) => {
+        const node = nodes.get(id)
+        return node?.inventoryId || node?.producedInventoryId
+      }))
+      expect(step).toBeDefined()
+      const result = nodes.get(step!.resultNodeId)!
+      const observedIvs = Object.fromEntries(STATS.filter((stat) => result.guaranteedIvs[stat] === null)
+        .map((stat) => [stat, result.possibleIvs[stat][0]])) as Partial<Record<Stat, number>>
+      saved = repository.completeStep({ planId: saved.id, stepId: step!.id, observedIvs, observedNature: result.nature ?? 'Hardy' })
+      expect(repository.inventory({ status: 'Consumed' })).toHaveLength(0)
+    }
+    expect(saved.status).toBe('Completed')
+    expect(repository.inventory()).toHaveLength(1)
     database.close()
   })
 

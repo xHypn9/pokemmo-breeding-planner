@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { NATURES, PLANNER_MAX_STATES, STATS } from '../../shared/constants'
 import type {
   AlphaRequirement, BreedingPlanTree, BreedingTarget, BoxRecord, DashboardStats, Gender, InventoryInput,
-  InventoryPokemon, Nature, PlanNode, PlannerProgress, SavedPlan, SavedPlanSummary, Species, Stat
+  InventoryPokemon, Nature, PlanNode, PlanStep, PlannerProgress, SavedPlan, SavedPlanSummary, Species, Stat
 } from '../../shared/types'
 import type { CloudBackupEntry, CloudBackupState } from '../../shared/ipc'
+import { stepCompletionBlocker } from '../../shared/planProgress'
 import { nodeMeetsTargetIv, normalizeTargetIvText, parseTargetIvText, targetIvIsExact, targetIvLabel } from '../../shared/target'
 import { useTextPrompt } from './components/useTextPrompt'
 import { Sprite } from './components/Sprite'
+import { BreedParentRow } from './components/BreedParentRow'
 import { PlanTree } from './components/PlanTree'
 import { ScannerView } from './components/ScannerView'
 
@@ -146,7 +148,7 @@ function InventoryView({ species, boxes, inventory, refresh, run }: ReturnType<t
     <select value={alpha} onChange={(e) => setAlpha(e.target.value)}><option value="">Alpha: Any</option><option value="yes">Alpha: Yes</option><option value="no">Alpha: No</option></select>
     <select value={ha} onChange={(e) => setHa(e.target.value)}><option value="">HA: Any</option><option value="yes">HA: Yes</option><option value="no">HA: No</option></select>
     <select value={nature} onChange={(e) => setNature(e.target.value)}><option value="">All natures</option>{NATURES.map((entry) => <option key={entry}>{entry}</option>)}</select>
-    <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option><option>Available</option><option>Unavailable</option><option>Reserved</option><option>Consumed</option></select>
+    <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option><option>Available</option><option>Unavailable</option><option>Reserved</option></select>
   </div><div className="toolbar compact"><span>31 IV:</span>{STATS.map((stat) => <label className="check" key={stat}><input type="checkbox" checked={iv31.includes(stat)} onChange={() => setIv31((old) => old.includes(stat) ? old.filter((x) => x !== stat) : [...old, stat])} />{stat}</label>)}
     <span className="spacer" /><button onClick={() => setAddingBox(true)}>+ Box</button><button className="primary" onClick={() => setEditing('new')}>+ Pokémon</button></div>
   {selected.length > 0 && <div className="bulk-bar"><b>{selected.length} selected</b><select onChange={(e) => { if (e.target.value) void bulkUpdate({ boxId: Number(e.target.value) }, 'box updated') }} defaultValue=""><option value="">Move to box…</option>{boxes.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ nature: e.target.value as Nature }, `nature ${e.target.value}`) }} defaultValue=""><option value="">Set nature…</option>{NATURES.map((entry) => <option key={entry}>{entry}</option>)}</select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ alpha: e.target.value === 'yes' }, `Alpha ${e.target.value}`) }} defaultValue=""><option value="">Set Alpha…</option><option value="yes">Yes</option><option value="no">No</option></select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ ha: e.target.value === 'yes' }, `HA ${e.target.value}`) }} defaultValue=""><option value="">Set HA…</option><option value="yes">Yes</option><option value="no">No</option></select><select onChange={(e) => { if (e.target.value) void bulkUpdate({ breedingEnabled: e.target.value === 'available' }, e.target.value) }} defaultValue=""><option value="">Set breeding status…</option><option value="available">Available</option><option value="unavailable">Unavailable</option></select><button onClick={() => setSelected([])}>Clear</button></div>}
@@ -267,8 +269,12 @@ function PlannerView({ species, inventory, run, onOpenSaved, initialTarget }: Re
   {selectedNode && <NodeDetail node={selectedNode} species={species} plan={plan} onClose={() => setSelectedNode(null)} />}</section>
 }
 
-function NodeDetail({ node, species, plan, onClose }: { node: PlanNode; species: Species[]; plan: BreedingPlanTree | null; onClose(): void }) {
+function NodeDetail({ node, species, plan, onClose, onCompleteStep, completingStepId }: {
+  node: PlanNode; species: Species[]; plan: BreedingPlanTree | null; onClose(): void
+  onCompleteStep?: (step: PlanStep) => void; completingStepId?: string | null
+}) {
   const step = plan?.steps.find((entry) => entry.resultNodeId === node.id)
+  const blocker = step && plan ? stepCompletionBlocker(plan, step) : null
   return <div className="drawer"><div className="panel-title"><h2>{node.kind === 'missing' ? node.missing?.id.toUpperCase() : species.find((entry) => entry.id === node.speciesId)?.name}</h2><button onClick={onClose}>×</button></div>
     <div className="detail-head"><Sprite speciesId={node.speciesId} size={70} /><div><b>{node.gender}</b><span>{node.alpha ? 'Alpha' : 'Normal'} · {node.ha ? 'HA Yes' : 'HA No'}</span><span>{node.boxName ?? ''}</span></div></div>
     <div className="iv-detail">{STATS.map((stat) => {
@@ -278,27 +284,40 @@ function NodeDetail({ node, species, plan, onClose }: { node: PlanNode; species:
       return <div className={ignored ? 'ignored-detail' : ''} key={stat}><span>{stat}</span><b>{display}</b><small>{detail}</small></div>
     })}</div>
     {node.missing && <div className="constraint"><h3>External constraints</h3><p>Egg Group: {node.missing.eggGroups.join(' + ')}</p><p>Gender: {node.missing.gender}</p><p>Nature: {node.missing.nature ?? 'Any'} · HA: {node.missing.ha === null ? 'Any' : node.missing.ha ? 'Required' : 'No'} · Alpha: {node.missing.alpha ? 'Yes' : 'No'}</p></div>}
-    {step && <div className="constraint"><h3>Breed step #{step.order}</h3><p>Parent A: {step.parentAItem.type === 'Brace' ? `Brace → ${step.parentAItem.stat}` : step.parentAItem.type === 'Everstone' ? `Everstone → ${step.parentAItem.nature}` : 'No item'}</p><p>Parent B: {step.parentBItem.type === 'Brace' ? `Brace → ${step.parentBItem.stat}` : step.parentBItem.type === 'Everstone' ? `Everstone → ${step.parentBItem.nature}` : 'No item'}</p><p className="select-gender">SELECT {step.selectedGender.toUpperCase()}</p>{step.reasons.map((reason, i) => <small key={i}>{reason.property}: {reason.reason}</small>)}</div>}
+    {step && <div className="constraint"><h3>Breed step #{step.order}</h3><div className="breed-parents">
+      <BreedParentRow node={plan?.nodes.find((entry) => entry.id === step.parentAId)} item={step.parentAItem} species={species} position="A" />
+      <BreedParentRow node={plan?.nodes.find((entry) => entry.id === step.parentBId)} item={step.parentBItem} species={species} position="B" />
+    </div><p className="select-gender">SELECT {step.selectedGender.toUpperCase()}</p>{step.reasons.map((reason, i) => <small key={i}>{reason.property}: {reason.reason}</small>)}
+      {onCompleteStep && <div className="step-completion"><button className="primary" disabled={Boolean(blocker) || Boolean(completingStepId)} onClick={() => onCompleteStep(step)}>{completingStepId === step.id ? 'Completing…' : 'Mark this breed completed'}</button><small>{blocker ?? 'Both parents will be removed and the child added to your inventory.'}</small></div>}
+    </div>}
   </div>
 }
 
 function PlansView({ plans, species, opened, setOpened, refresh, setNotice, onRecalculate }: { plans: SavedPlanSummary[]; species: Species[]; opened: SavedPlan | null; setOpened(plan: SavedPlan | null): void; refresh(): Promise<void>; setNotice(message: string): void; onRecalculate(target: BreedingTarget): void }) {
   const [selectedNode, setSelectedNode] = useState<PlanNode | null>(null)
-  const { ask, modal } = useTextPrompt()
-  const load = async (id: number) => setOpened(await window.desktopApi.plans.get(id))
-  const nextStep = opened?.tree.steps.find((step) => step.status === 'Pending' && [step.parentAId, step.parentBId].every((id) => {
-    const node = opened.tree.nodes.find((entry) => entry.id === id); return node && node.kind !== 'missing' && (!['intermediate', 'result'].includes(node.kind) || node.producedInventoryId)
-  }))
-  const complete = async () => {
-    if (!opened || !nextStep || !confirm(`Confirm ${nextStep.id}? Both parents will be consumed. A safety snapshot is created first.`)) return
-    const result = opened.tree.nodes.find((node) => node.id === nextStep.resultNodeId); if (!result) return
-    const observedIvs: Partial<Record<Stat, number>> = {}
-    for (const stat of STATS) if (result.guaranteedIvs[stat] === null) {
-      const value = await ask(`Observed ${stat.toUpperCase()} (allowed: ${result.possibleIvs[stat].join(', ')})`); if (value === null) return; observedIvs[stat] = Number(value)
-    }
-    const observedNature = result.natureGuaranteed ? undefined : await ask('Observed nature') as Nature | null
-    if (!result.natureGuaranteed && !observedNature) return
-    try { const next = await window.desktopApi.plans.completeStep({ planId: opened.id, stepId: nextStep.id, observedIvs, observedNature: observedNature ?? undefined }); setOpened(next); await refresh(); setNotice(`${nextStep.id} completed safely`) } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
+  const [completingStepId, setCompletingStepId] = useState<string | null>(null)
+  const completingRef = useRef(false)
+  const { ask, askNature, askConfirm, modal } = useTextPrompt()
+  const load = async (id: number) => { setSelectedNode(null); setOpened(await window.desktopApi.plans.get(id)) }
+  const nextStep = opened?.tree.steps.find((step) => !stepCompletionBlocker(opened.tree, step))
+  const complete = async (step: PlanStep) => {
+    if (!opened || completingRef.current || stepCompletionBlocker(opened.tree, step)) return
+    completingRef.current = true; setCompletingStepId(step.id)
+    try {
+      if (!await askConfirm(`Confirm breed step #${step.order}? Both parents will be removed. A safety snapshot is created first.`)) return
+      const result = opened.tree.nodes.find((node) => node.id === step.resultNodeId); if (!result) return
+      const observedIvs: Partial<Record<Stat, number>> = {}
+      for (const stat of STATS) if (result.guaranteedIvs[stat] === null) {
+        const value = await ask(`Observed ${stat.toUpperCase()} (allowed: ${result.possibleIvs[stat].join(', ')})`); if (value === null) return; observedIvs[stat] = Number(value)
+      }
+      const observedNature = result.natureGuaranteed ? undefined : await askNature('Observed nature')
+      if (!result.natureGuaranteed && !observedNature) return
+      const next = await window.desktopApi.plans.completeStep({ planId: opened.id, stepId: step.id, observedIvs, observedNature: observedNature ?? undefined })
+      setOpened(next)
+      setSelectedNode((current) => current ? next.tree.nodes.find((node) => node.id === current.id) ?? null : null)
+      await refresh(); setNotice(`${step.id} completed safely`)
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
+    finally { completingRef.current = false; setCompletingStepId(null) }
   }
   const replace = async (missingId: string) => {
     if (!opened) return; const raw = await ask('Inventory ID of the purchased/caught breeder'); if (!raw) return
@@ -310,10 +329,10 @@ function PlansView({ plans, species, opened, setOpened, refresh, setNotice, onRe
     onRecalculate(opened.target)
   }
   return <section><div className="saved-layout"><div className="plan-list"><div className="panel-title"><h2>Saved plans</h2><span>{plans.length}</span></div>{plans.map((plan) => <button className={opened?.id === plan.id ? 'selected' : ''} key={plan.id} onClick={() => void load(plan.id)}><b>{plan.name}</b><span className={`status ${plan.status.toLowerCase().replace(' ', '-')}`}>{plan.status}</span><small>{new Date(plan.updatedAt).toLocaleString()}</small></button>)}</div>
-    <div className="panel saved-detail">{opened ? <><div className="panel-title"><div><h2>{opened.name}</h2><small>{opened.status} · {opened.tree.steps.filter((s) => s.status === 'Completed').length}/{opened.tree.steps.length} completed</small></div><div className="actions-row"><button onClick={recalculate}>Recalculate</button><button disabled={!nextStep} className="primary" onClick={() => void complete()}>Breed Completed</button><button className="danger" onClick={async () => { if (confirm('Delete plan and release reserved breeders?')) { await window.desktopApi.plans.delete(opened.id); setOpened(null); await refresh() } }}>Delete</button></div></div>
+    <div className="panel saved-detail">{opened ? <><div className="panel-title"><div><h2>{opened.name}</h2><small>{opened.status} · {opened.tree.steps.filter((s) => s.status === 'Completed').length}/{opened.tree.steps.length} completed</small></div><div className="actions-row"><button onClick={recalculate}>Recalculate</button><button disabled={!nextStep || Boolean(completingStepId)} className="primary" onClick={() => { if (nextStep) void complete(nextStep) }}>Complete next ready</button><button className="danger" onClick={async () => { if (confirm('Delete plan and release reserved breeders?')) { await window.desktopApi.plans.delete(opened.id); setOpened(null); await refresh() } }}>Delete</button></div></div>
       {opened.tree.missingBreeders.length > 0 && <div className="missing-strip">{opened.tree.missingBreeders.map((missing) => <button key={missing.id} onClick={() => void replace(missing.id)}><b>{missing.id.toUpperCase()}</b><span>{missing.eggGroups.join('+')} · {missing.gender}</span><small>Replace Missing Breeder</small></button>)}</div>}
       <PlanTree plan={opened.tree} species={species} onSelect={setSelectedNode} /></> : <div className="empty-state"><h2>Select a saved plan</h2></div>}</div></div>
-    {modal}{selectedNode && <NodeDetail node={selectedNode} species={species} plan={opened?.tree ?? null} onClose={() => setSelectedNode(null)} />}</section>
+    {modal}{selectedNode && opened && <NodeDetail node={opened.tree.nodes.find((node) => node.id === selectedNode.id) ?? selectedNode} species={species} plan={opened.tree} onClose={() => setSelectedNode(null)} onCompleteStep={(step) => { void complete(step) }} completingStepId={completingStepId} />}</section>
 }
 
 function BackupView({ run }: { run(operation: () => Promise<unknown>, success: string): Promise<void> }) {

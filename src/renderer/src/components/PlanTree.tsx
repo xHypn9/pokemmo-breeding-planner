@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { Background, Controls, Handle, Position, ReactFlow, type Edge, type Node } from '@xyflow/react'
 import { STATS } from '../../../shared/constants'
+import { shoppingListForSteps } from '../../../shared/shoppingList'
 import { nodeMeetsTargetIv, targetIvIsExact } from '../../../shared/target'
 import type { BreedingPlanTree, BreedingTarget, PlanNode, Species } from '../../../shared/types'
 import { Sprite } from './Sprite'
@@ -43,8 +44,17 @@ function NodeCard({ data }: { data: { model: PlanNode; species: Species[]; targe
 
 export function PlanTree({ plan, species, onSelect }: { plan: BreedingPlanTree; species: Species[]; onSelect(node: PlanNode): void }) {
   const graph = useMemo(() => layout(plan), [plan])
+  const shoppingList = useMemo(() => shoppingListForSteps(plan.steps), [plan.steps])
   const nodeTypes = useMemo(() => ({ planner: ({ data }: { data: Record<string, unknown> }) => <NodeCard data={{ model: data.model as PlanNode, species, target: plan.target }} /> }), [species, plan.target])
   return <div className="tree-canvas"><ReactFlow nodes={graph.nodes.map((node) => ({ ...node, data: { ...node.data, species, target: plan.target } }))} edges={graph.edges} nodeTypes={nodeTypes}
     onNodeClick={(_event, node) => onSelect((node.data as Record<string, unknown>).model as PlanNode)} fitView minZoom={0.15} maxZoom={1.8} nodesDraggable={false}>
-    <Background color="#243044" gap={24} /><Controls /></ReactFlow></div>
+    <Background color="#243044" gap={24} /><Controls /></ReactFlow>
+    <aside className="tree-shopping-list" aria-label="Items required for remaining breeds">
+      <div className="tree-shopping-heading"><strong>Items to buy</strong><small>{shoppingList.remainingBreeds} breeds left</small></div>
+      {shoppingList.items.length ? <ul>{shoppingList.items.map((item) => <li key={item.name}><span>{item.name}</span><b>×{item.quantity}</b></li>)}</ul>
+        : <p>No items needed</p>}
+      <div className="tree-shopping-total"><span>Total</span><b>{shoppingList.total}</b></div>
+      <small className="tree-shopping-note">Items already in your bag are not deducted.</small>
+    </aside>
+  </div>
 }

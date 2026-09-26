@@ -1,6 +1,6 @@
 {
   "name": "pokemmo-breeding-planner",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "Offline, deterministic PokeMMO breeding inventory and planner",
   "main": "out/main/index.js",
   "author": "PokeMMO Breeding Planner contributors",

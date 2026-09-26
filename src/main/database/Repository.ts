@@ -73,6 +73,7 @@ export class AppRepository {
   }
 
   createPokemon(input: InventoryInput, action = 'pokemon_added'): InventoryPokemon {
+    if (input.status === 'Consumed') throw new Error('Consumed Pokémon cannot be added to inventory')
     const species = this.rules.species(input.speciesId)
     if (!this.rules.validateGender(input.speciesId, input.gender)) throw new Error(`${species.name} cannot have gender ${input.gender}`)
     for (const stat of STATS) if (!Number.isInteger(input.ivs[stat]) || input.ivs[stat] < 0 || input.ivs[stat] > 31) throw new Error(`${stat} must be an integer from 0 to 31`)
@@ -92,6 +93,7 @@ export class AppRepository {
   }
 
   updatePokemon(id: number, patch: Partial<InventoryInput>): InventoryPokemon {
+    if (patch.status === 'Consumed') throw new Error('Consumed Pokémon cannot be kept in inventory')
     const current = this.inventoryById(id)
     const breedingFields: Array<keyof InventoryInput> = ['speciesId', 'gender', 'ivs', 'nature', 'alpha', 'ha', 'status', 'breedingEnabled']
     if (current.status !== 'Available' && breedingFields.some((field) => patch[field] !== undefined)) {
@@ -194,7 +196,8 @@ export class AppRepository {
       for (const id of parentIds as number[]) {
         const parent = this.inventoryById(id)
         if (!['Available', 'Reserved'].includes(parent.status)) throw new Error(`Parent #${id} is not available`)
-        this.db.prepare("UPDATE pokemon_inventory SET status='Consumed',updated_at=? WHERE id=?").run(now(), id)
+        this.db.prepare('UPDATE missing_breeders SET replaced_inventory_id=NULL WHERE replaced_inventory_id=?').run(id)
+        this.db.prepare('DELETE FROM pokemon_inventory WHERE id=?').run(id)
       }
       const isFinal = resultNode.id === tree.rootNodeId
       const created = this.createPokemon({
@@ -294,14 +297,15 @@ export class AppRepository {
   }
 
   importData(data: JsonExport): void {
-    if (![1, APP_SCHEMA_VERSION].includes(data.schemaVersion)) throw new Error(`Unsupported JSON schema version ${data.schemaVersion}`)
+    if (![1, 2, APP_SCHEMA_VERSION].includes(data.schemaVersion)) throw new Error(`Unsupported JSON schema version ${data.schemaVersion}`)
     if (!Array.isArray(data.boxes) || !Array.isArray(data.pokemon) || !Array.isArray(data.plans) || !data.settings || typeof data.settings !== 'object') throw new Error('JSON export has an invalid top-level structure')
+    const pokemonToImport = data.pokemon.filter((pokemon) => pokemon.status !== 'Consumed')
     const boxIds = new Set<number>(); const pokemonIds = new Set<number>(); const planIds = new Set<number>()
     for (const box of data.boxes) {
       if (!Number.isInteger(box.id) || box.id <= 0 || boxIds.has(box.id) || !box.name?.trim()) throw new Error(`Invalid or duplicate box #${box.id}`)
       boxIds.add(box.id)
     }
-    for (const pokemon of data.pokemon) {
+    for (const pokemon of pokemonToImport) {
       if (!Number.isInteger(pokemon.id) || pokemon.id <= 0 || pokemonIds.has(pokemon.id)) throw new Error(`Invalid or duplicate Pokémon #${pokemon.id}`)
       pokemonIds.add(pokemon.id)
       const species = this.rules.species(pokemon.speciesId)
@@ -314,13 +318,19 @@ export class AppRepository {
       planIds.add(plan.id)
       const validation = this.validator.validate(plan.tree)
       if (!validation.valid) throw new Error(`Imported plan #${plan.id} is invalid: ${validation.errors.join('; ')}`)
-      for (const inventoryId of plan.tree.inventoryIds) if (!pokemonIds.has(inventoryId)) throw new Error(`Imported plan #${plan.id} references missing Pokémon #${inventoryId}`)
-      for (const node of plan.tree.nodes) if (node.producedInventoryId && !pokemonIds.has(node.producedInventoryId)) throw new Error(`Imported plan #${plan.id} references missing produced Pokémon #${node.producedInventoryId}`)
+      const nodes = new Map(plan.tree.nodes.map((node) => [node.id, node]))
+      for (const step of plan.tree.steps.filter((entry) => entry.status === 'Pending')) {
+        for (const parentId of [step.parentAId, step.parentBId]) {
+          const parent = nodes.get(parentId)
+          const inventoryId = parent?.inventoryId ?? parent?.producedInventoryId
+          if (inventoryId && !pokemonIds.has(inventoryId)) throw new Error(`Imported plan #${plan.id} references missing active Pokémon #${inventoryId}`)
+        }
+      }
     }
     this.database.transaction(() => {
       this.db.exec('DELETE FROM operation_history; DELETE FROM missing_breeders; DELETE FROM breeding_plan_edges; DELETE FROM breeding_plan_steps; DELETE FROM breeding_plan_nodes; DELETE FROM breeding_plans; DELETE FROM pokemon_inventory; DELETE FROM boxes;')
       for (const box of data.boxes) this.db.prepare('INSERT INTO boxes(id,name,created_at) VALUES(?,?,?)').run(box.id, box.name, box.createdAt)
-      for (const pokemon of data.pokemon) this.db.prepare(`INSERT INTO pokemon_inventory(id,species_id,gender,hp,atk,def,sp_atk,sp_def,speed,nature,alpha,ha,box_id,notes,status,breeding_enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      for (const pokemon of pokemonToImport) this.db.prepare(`INSERT INTO pokemon_inventory(id,species_id,gender,hp,atk,def,sp_atk,sp_def,speed,nature,alpha,ha,box_id,notes,status,breeding_enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         pokemon.id, pokemon.speciesId, pokemon.gender, pokemon.ivs.hp, pokemon.ivs.atk, pokemon.ivs.def, pokemon.ivs.spAtk, pokemon.ivs.spDef, pokemon.ivs.speed,
         pokemon.nature, pokemon.alpha ? 1 : 0, pokemon.ha ? 1 : 0, pokemon.boxId, pokemon.notes, pokemon.status, pokemon.breedingEnabled === false ? 0 : 1, pokemon.createdAt, pokemon.updatedAt)
       for (const plan of data.plans) {
@@ -329,7 +339,7 @@ export class AppRepository {
         this.persistPlanChildren(plan.id, plan.tree)
       }
       for (const [key, value] of Object.entries(data.settings)) this.setSetting(key, value)
-      this.log('json_import', 'database', null, { pokemon: data.pokemon.length, plans: data.plans.length })
+      this.log('json_import', 'database', null, { pokemon: pokemonToImport.length, plans: data.plans.length })
     })
   }
 
