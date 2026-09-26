@@ -168,6 +168,7 @@ function createWindow(): void {
   })
   mainWindow = window
   window.on('closed', () => { if (mainWindow === window) mainWindow = null })
+  window.on('focus', () => { if (!window.webContents.isFocused()) window.webContents.focus() })
   if (development) {
     window.webContents.on('console-message', (_event, level, message) => console.log(`[renderer:${level}] ${message}`))
     window.webContents.on('preload-error', (_event, preloadPath, error) => console.error(`Preload error at ${preloadPath}`, error))
