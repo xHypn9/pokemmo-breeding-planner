@@ -1,6 +1,6 @@
 {
   "name": "pokemmo-breeding-planner",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Offline, deterministic PokeMMO breeding inventory and planner",
   "main": "out/main/index.js",
   "author": "PokeMMO Breeding Planner contributors",
@@ -13,7 +13,8 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && electron-vite build",
-    "dist": "tsc --noEmit && electron-vite build && electron-builder --win nsis",
+    "dist": "node scripts/require-google-oauth.mjs && tsc --noEmit && electron-vite build && electron-builder --win nsis",
+    "dist:without-cloud": "tsc --noEmit && electron-vite build && electron-builder --win nsis",
     "update-species-data": "tsx scripts/update-species-dataset.ts",
     "dataset:update": "tsx scripts/update-species-dataset.ts",
     "seed:demo": "tsx scripts/seed-development.ts",

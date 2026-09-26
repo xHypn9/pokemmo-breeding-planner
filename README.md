@@ -158,7 +158,7 @@ Cloud backup is optional and does not require Google Drive Desktop or a remote a
    # or: pnpm dist
    ```
 
-   Runtime `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` environment variables override the build values for local development. No OAuth credential, access token or refresh token belongs in the repository.
+   `pnpm dist` requires both values and stops before packaging if either is missing. For a local installer without cloud backup, use `pnpm dist:without-cloud`. Runtime `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` environment variables override the build values for local development. No OAuth credential, access token or refresh token belongs in the repository.
 6. Start the application and choose **Connect Google Drive**. Google opens in the system browser and returns to a random `127.0.0.1` loopback port using PKCE and verified `state`.
 
 The refresh token is encrypted with Electron `safeStorage` and stored separately below Electron `userData/cloud`. If OS-backed encryption is unavailable, the app refuses to persist it. `settings.ini`, scanner calibration, hotkey and PC-specific preferences remain local. Upload is always manual: local database writes only mark the cloud state dirty.
