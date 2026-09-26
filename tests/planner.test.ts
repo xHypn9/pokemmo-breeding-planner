@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { BreedingPlanner, PlanValidator } from '../src/domain/breeding'
+import { PLANNER_MAX_STATES } from '../src/shared/constants'
 import { normalizeTargetIvText, parseTargetIvText, targetIvIsExact, targetIvIsRequired, targetIvLabel, targetIvMatchesValue } from '../src/shared/target'
 import type { BreedingTarget } from '../src/shared/types'
-import { ivs, pokemon } from './helpers'
+import { ivs, node, pokemon } from './helpers'
 
 const exactTargetIvs = ivs({ hp: 31, atk: 31, def: 31, spAtk: 15, spDef: 31, speed: 31 })
 const target: BreedingTarget = {
@@ -12,6 +13,10 @@ const target: BreedingTarget = {
 }
 
 describe('planner and validator', () => {
+  it('uses a 32,000-state planner search budget', () => {
+    expect(PLANNER_MAX_STATES).toBe(32_000)
+  })
+
   it.each([445, 81, 128])('supports ignored nature for species %s with zero, one or two IV constraints', (speciesId) => {
     for (const values of [
       { hp: null, atk: null, def: null, spAtk: null, spDef: null, speed: null },
@@ -164,6 +169,55 @@ describe('planner and validator', () => {
     expect(plan.steps).toHaveLength(1)
     expect(plan.inventoryIds).toEqual([1, 2])
     expect(plan.steps[0]?.parentAItem.type === 'Everstone' || plan.steps[0]?.parentBItem.type === 'Everstone').toBe(true)
+  })
+
+  it.each([
+    { line: 'Zorua', targetSpeciesId: 570, evolvedMaleSpeciesId: 571, compatibleOutsiderSpeciesId: 50 },
+    { line: 'Pikachu', targetSpeciesId: 25, evolvedMaleSpeciesId: 26, compatibleOutsiderSpeciesId: 133 }
+  ])('prefers available breeders from the $line evolution line at the same breeding cost', ({ targetSpeciesId, evolvedMaleSpeciesId, compatibleOutsiderSpeciesId }) => {
+    const lineTarget: BreedingTarget = {
+      speciesId: targetSpeciesId,
+      ivs: { hp: 31, atk: null, def: null, spAtk: null, spDef: null, speed: null },
+      nature: 'Hardy', ha: 'Any', alpha: 'Alpha', optimizer: 'balanced'
+    }
+    const inventory = [
+      pokemon(10, targetSpeciesId, 'Female', ivs({ hp: 30 }), 'Hardy', true),
+      pokemon(20, evolvedMaleSpeciesId, 'Male', ivs({ hp: 31 }), 'Adamant', true),
+      // Lower ID used to win stable ordering even though it is from another line.
+      pokemon(1, compatibleOutsiderSpeciesId, 'Male', ivs({ hp: 31 }), 'Adamant', true)
+    ]
+
+    const plan = new BreedingPlanner().calculate(inventory, lineTarget, { maxStates: 1_000 })
+    const root = plan.nodes.find((node) => node.id === plan.rootNodeId)
+
+    expect(plan.valid).toBe(true)
+    expect(plan.steps).toHaveLength(1)
+    expect(plan.missingBreeders).toHaveLength(0)
+    expect(plan.inventoryIds).toEqual([10, 20])
+    expect(plan.diagnostics.bestObjectiveScore?.[1]).toBe(-2)
+    expect(root?.speciesId).toBe(targetSpeciesId)
+  })
+
+  it('keeps a same-line Ditto offspring whose new gender enables further breeding', () => {
+    const zoruaTarget: BreedingTarget = {
+      speciesId: 570,
+      ivs: { hp: 31, atk: null, def: 31, spAtk: null, spDef: null, speed: null },
+      nature: null, ha: 'Any', alpha: 'Alpha', optimizer: 'balanced'
+    }
+    const planner = new BreedingPlanner() as any
+    const candidate = (entry: ReturnType<typeof node>) => ({
+      node: entry, inventory: new Set(entry.provenanceInventoryIds), missing: new Set<string>(), missingScore: 0, breeds: 0
+    })
+    const offspring = planner.combineCandidates(
+      candidate(node('inventory-279', 570, 'Male', ivs({ hp: 31 }), 'Hardy', true)),
+      candidate(node('inventory-132', 132, 'Genderless', ivs({ hp: 31 }), 'Hardy', true)),
+      zoruaTarget
+    )
+
+    expect(offspring).toHaveLength(1)
+    expect(offspring[0]?.node.speciesId).toBe(570)
+    expect(offspring[0]?.node.gender).toBe('Female')
+    expect(offspring[0]?.node.possibleIvs.hp).toEqual([31])
   })
 
   it('uses a compatible cross-species male for the final Wingull-line breed', () => {

@@ -1,4 +1,4 @@
-import { RULESET_VERSION, STATS } from '../../shared/constants'
+import { PLANNER_MAX_STATES, RULESET_VERSION, STATS } from '../../shared/constants'
 import { nodeMeetsTargetIv, targetIvIsExact, targetIvIsRequired } from '../../shared/target'
 import type {
   BreedingPlanTree, BreedingTarget, Gender, GuaranteedIvs, HeldItem, InventoryPokemon,
@@ -61,6 +61,7 @@ export class BreedingPlanner {
   private readonly validator: PlanValidator
   private sequence = 0
   private missingSequence = 0
+  private targetLineInventoryIds = new Set<number>()
 
   constructor(rules = new PokeMMORuleset()) {
     this.rules = rules
@@ -82,17 +83,21 @@ export class BreedingPlanner {
     const available = inventory.filter((pokemon) => pokemon.status === 'Available' && pokemon.breedingEnabled !== false)
     const actual = available.map((pokemon) => this.inventoryCandidate(pokemon))
       .filter((candidate) => target.alpha !== 'Alpha' || candidate.node.alpha)
+    const targetLineId = this.rules.species(target.speciesId).evolutionChainId
+    this.targetLineInventoryIds = new Set(actual
+      .filter((candidate) => candidate.node.speciesId !== null && this.rules.species(candidate.node.speciesId).evolutionChainId === targetLineId)
+      .flatMap((candidate) => [...candidate.inventory]))
     const ownedCandidates = [...actual]
 
     let best = actual.filter((candidate) => this.isExistingGoal(candidate, target))
       .sort((left, right) => (left.node.inventoryId ?? Number.MAX_SAFE_INTEGER) - (right.node.inventoryId ?? Number.MAX_SAFE_INTEGER))[0] ?? null
     if (best) diagnostics.failureReason = 'No breeding required: an available owned Pokémon already satisfies the selected target.'
     if (!best) {
-      const maxStates = options.maxStates ?? 18_000
+      const maxStates = options.maxStates ?? PLANNER_MAX_STATES
       const relevantActual = actual.filter((candidate) => this.isDirectlyRelevant(candidate, target))
       const alternatives: Array<{ candidate: Candidate; reason: string }> = []
       if (relevantActual.length > 1) {
-        const inventoryBudget = Math.min(maxStates, Math.max(1, Math.min(6_000, Math.floor(maxStates / 3))))
+        const inventoryBudget = Math.min(maxStates, Math.max(1, Math.floor(maxStates / 3)))
         const inventoryBest = this.search(relevantActual, target, diagnostics, { ...options, maxStates: inventoryBudget }, ownedCandidates)
         if (inventoryBest) alternatives.push({ candidate: inventoryBest, reason: 'A complete solution was found using only compatible owned Pokémon.' })
 
@@ -142,7 +147,7 @@ export class BreedingPlanner {
   }
 
   private search(seed: Candidate[], target: BreedingTarget, diagnostics: PlannerDiagnostics, options: PlannerOptions, ownedCollector?: Candidate[]): Candidate | null {
-    const maxStates = options.maxStates ?? 18_000
+    const maxStates = options.maxStates ?? PLANNER_MAX_STATES
     const maxFrontier = options.maxFrontier ?? 1_200
     const maxRounds = options.maxRounds ?? 8
     const originals = seed.filter((candidate) => candidate.node.provenanceInventoryIds.length > 0 || candidate.node.kind === 'missing')
@@ -182,8 +187,10 @@ export class BreedingPlanner {
         if (explored >= maxStates) break
       }
       diagnostics.plansConsidered += generated.length
-      // A first goal is only an incumbent: later levels can use fewer external parents.
-      if (best && best.breeds === 1 && best.missing.size === 0) return best
+      // One breed with two same-line owned parents is the best possible result; otherwise
+      // continue so equivalent one-breed plans can still prefer the target evolution line.
+      const bestLineParents = best ? this.lineageInventoryCount(best) : 0
+      if (best && best.breeds === 1 && best.missing.size === 0 && bestLineParents >= Math.min(2, this.targetLineInventoryIds.size)) return best
       frontier = this.prune(generated, target, Math.max(160, Math.floor(maxFrontier / 2)), diagnostics)
       pool = [...originals, ...this.prune([...pool.filter((candidate) => candidate.breeds > 0), ...frontier], target, maxFrontier, diagnostics)]
       options.onProgress?.({ phase: `Search round ${round + 1} complete`, explored: diagnostics.statesExplored, frontier: frontier.length, bestMissing: frontier[0]?.missing.size ?? null })
@@ -223,8 +230,10 @@ export class BreedingPlanner {
         const afterMask = statMask(node, target)
         const afterUtility = bitCount(afterMask) + Number(node.natureGuaranteed && node.nature === target.nature)
         const lineChanged = node.speciesId !== a.node.speciesId && node.speciesId !== b.node.speciesId
+        const genderExpanded = gender !== a.node.gender && gender !== b.node.gender
         const haGained = node.ha && !a.node.ha && !b.node.ha
-        if ((afterUtility === 0 && requiredStatMask(target) !== 0) || (afterUtility <= Math.max(bitCount(maskA), bitCount(maskB)) && !lineChanged && !haGained)) continue
+        if ((afterUtility === 0 && requiredStatMask(target) !== 0)
+          || (afterUtility <= Math.max(bitCount(maskA), bitCount(maskB)) && !lineChanged && !genderExpanded && !haGained)) continue
         if (afterUtility + 2 < beforeUtility) continue
         results.push({
           node, left: a, right: b, itemA, itemB, reasons: simulated.reasons,
@@ -278,11 +287,18 @@ export class BreedingPlanner {
   }
 
   private objective(candidate: Candidate, target: BreedingTarget): number[] {
-    const valuableInventoryPenalty = target.alpha !== 'Alpha'
-      ? [...candidate.inventory].filter((id) => candidate.node.provenanceInventoryIds.includes(id)).length * 0
-      : 0
-    if (target.optimizer === 'breeds') return [candidate.breeds, candidate.missing.size, candidate.missingScore, candidate.inventory.size + valuableInventoryPenalty]
-    return [candidate.missing.size, candidate.missingScore, candidate.breeds, candidate.inventory.size + valuableInventoryPenalty]
+    // Every mode minimizes breedings first and favors owned breeders from the target line.
+    // The selected mode only changes priorities between plans with the same cost.
+    const tieBreak = target.optimizer === 'missing'
+      ? [candidate.missing.size, candidate.missingScore, -candidate.inventory.size]
+      : target.optimizer === 'breeds'
+        ? [-candidate.inventory.size, candidate.missing.size, candidate.missingScore]
+        : [candidate.missing.size, -candidate.inventory.size, candidate.missingScore]
+    return [candidate.breeds, -this.lineageInventoryCount(candidate), ...tieBreak]
+  }
+
+  private lineageInventoryCount(candidate: Candidate): number {
+    return [...candidate.inventory].filter((id) => this.targetLineInventoryIds.has(id)).length
   }
 
   private compare(a: Candidate, b: Candidate, target: BreedingTarget): number {
@@ -507,7 +523,10 @@ export class BreedingPlanner {
     const targetGenders = this.rules.selectableGenders(targetSpecies.id)
     const crossSpeciesMaleAllowed = targetGenders.includes('Female') && targetGenders.includes('Male')
     const rankedOwned = ownedCandidates.filter((candidate) => candidate.missing.size === 0 && candidate.inventory.size > 0)
-      .sort((left, right) => left.breeds - right.breeds || left.inventory.size - right.inventory.size || left.node.id.localeCompare(right.node.id))
+      .sort((left, right) => left.breeds - right.breeds
+        || this.lineageInventoryCount(right) - this.lineageInventoryCount(left)
+        || left.inventory.size - right.inventory.size
+        || left.node.id.localeCompare(right.node.id))
     const speciesFits = (source: Candidate, template: Candidate): boolean => {
       if (source.node.speciesId === null) return false
       const species = this.rules.species(source.node.speciesId)
